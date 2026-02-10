@@ -1,0 +1,319 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//
+// Enums
+//
+
+enum Channel {
+  web
+  whatsapp
+  telegram
+}
+
+enum ThreadType {
+  browse
+  cart
+  order
+  group_order
+  support
+  suggestion
+  generic
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum IdempotencyScope {
+  inbound_message
+  outbound_message
+  payment_intent
+  webhook_event
+  generic
+}
+
+enum IntegrationProvider {
+  hubspot
+  woocommerce
+  whatsapp
+  telegram
+}
+
+enum IntegrationAuthType {
+  api_key
+  private_app_token
+  oauth2
+  mcp
+}
+
+enum IntegrationStatus {
+  active
+  disabled
+}
+
+//
+// Core: Customer + Identity
+//
+
+model Customer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Optional stable identifiers (when available)
+  email String? @db.VarChar(320)
+  phone String? @db.VarChar(64)
+
+  // User preferences & profile (M1-level: lightweight JSON; can normalize later)
+  preferencesJson Json? // vegan/kosher/allergies, brand prefs, opt-outs, quiet hours
+  profileJson     Json? // derived profile signals, segments, notes
+
+  // Multi-channel continuity
+  preferredChannel Channel?
+  lastSeenChannel  Channel?
+  lastSeenAt       DateTime?
+
+  // “Multiple active flows” support (Gil feedback)
+  foregroundThreadId String? @unique
+  foregroundThread   Thread? @relation("ForegroundThread", fields: [foregroundThreadId], references: [id])
+
+  // Relations
+  identities ChannelIdentity[]
+  threads    Thread[]
+  messages   Message[]
+  crmLinks   CrmLink[]
+  commerceLinks CommerceLink[]
+  idempotencyKeys IdempotencyKey[]
+
+  @@index([email])
+  @@index([phone])
+}
+
+model ChannelIdentity {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  channel Channel
+  // The platform-specific identifier (WhatsApp number, Telegram user id, web cookie/session id, etc.)
+  channelUserId String @db.VarChar(256)
+
+  // Optional: metadata about this identity (e.g., display name, language)
+  meta Json?
+
+  @@unique([channel, channelUserId])
+  @@index([customerId, channel])
+}
+
+//
+// Threads: allow multiple active flows in parallel
+//
+
+model Thread {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  type ThreadType @default(generic)
+
+  // Thread “key” lets you route messages to the correct thread.
+  // Examples:
+  // - "group_order:go_123"
+  // - "cart:manufacturer:A"
+  // - "order:woo_order_999"
+  key String? @db.VarChar(256)
+
+  status String? @db.VarChar(64) // e.g., open/closed/awaiting_payment
+  step   String? @db.VarChar(128) // e.g., awaiting_qty, awaiting_address
+
+  // Thread-specific context (entities extracted, cart refs, etc.)
+  contextJson Json?
+
+  lastActivityAt DateTime?
+
+  // Relations
+  messages Message[]
+
+  // For the foreground reference relation
+  foregroundFor Customer? @relation("ForegroundThread")
+
+  @@index([customerId, type])
+  @@index([customerId, lastActivityAt])
+  @@unique([customerId, key])
+}
+
+//
+// Messages: audit trail + debugging + summarization input
+//
+
+model Message {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  threadId String?
+  thread   Thread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+
+  channel   Channel
+  direction MessageDirection
+  text      String? @db.Text
+
+  // Optional: store normalized payload fragments / tool traces safely
+  meta Json?
+
+  // Useful for tracing a single request end-to-end
+  traceId String? @db.VarChar(64)
+
+  @@index([customerId, createdAt])
+  @@index([threadId, createdAt])
+  @@index([traceId])
+}
+
+//
+// Idempotency: required for safe webhooks + retries
+//
+
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  scope IdempotencyScope
+  key   String @db.VarChar(256)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  // Optional: store response snapshot for replay-safe behavior
+  responseJson Json?
+
+  // Optional: basic status
+  status String? @db.VarChar(32)
+
+  @@unique([scope, key])
+  @@index([customerId, scope])
+}
+
+//
+// CRM links (HubSpot) + Commerce links (Woo)
+// Keep these as external references, not secrets.
+//
+
+model CrmLink {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  provider IntegrationProvider @default(hubspot)
+
+  hubspotPortalId  String? @db.VarChar(64)
+  hubspotContactId String? @db.VarChar(64)
+  hubspotDealId    String? @db.VarChar(64)
+
+  // You can store pipeline/stage for quick lookup, but HubSpot remains the source of truth
+  dealPipelineId String? @db.VarChar(64)
+  dealStageId    String? @db.VarChar(64)
+
+  meta Json?
+
+  @@index([customerId, provider])
+  @@index([hubspotContactId])
+  @@index([hubspotDealId])
+}
+
+model CommerceLink {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  provider IntegrationProvider @default(woocommerce)
+
+  wooCustomerId String? @db.VarChar(64)
+  wooCartId     String? @db.VarChar(128)
+  wooOrderId    String? @db.VarChar(64)
+
+  meta Json?
+
+  @@index([customerId, provider])
+  @@index([wooOrderId])
+}
+
+//
+// Optional (future-friendly): Integration records
+// Useful if later you need multi-tenant OAuth or portal/account metadata.
+// For M1 you can create this table but not necessarily use it.
+//
+
+model IntegrationAccount {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  provider IntegrationProvider
+  authType IntegrationAuthType
+  status   IntegrationStatus @default(active)
+
+  // e.g., HubSpot portal/account id, Woo site identifier, etc.
+  accountId String? @db.VarChar(128)
+
+  // IMPORTANT: Do NOT store raw secrets here.
+  // If you later implement OAuth, store tokens encrypted, or store references to a secrets manager.
+  tokenRef String? @db.VarChar(256) // pointer to AWS Secrets Manager key, etc.
+
+  meta Json?
+
+  @@index([provider, status])
+  @@index([accountId])
+}
+
+//
+// M2-ready placeholder (very light): GroupOrder
+// Not required for M1 logic, but helps you avoid schema churn later.
+//
+
+model GroupOrder {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Manufacturer constraint (Gil)
+  manufacturerId String? @db.VarChar(128)
+
+  state String @default("DRAFT") @db.VarChar(32) // OPEN, MOQ_MET, CONFIRMED, etc.
+  constraintsJson Json? // max SKUs/plate, boxes/layer rules, product pallet params, etc.
+
+  // Basic progress
+  moqTarget Int?
+  moqCurrent Int?
+
+  expiresAt DateTime?
+
+  meta Json?
+
+  @@index([manufacturerId])
+  @@index([state])
+}
+
