@@ -16,10 +16,11 @@ This repository is intended to be the central brain that:
 ## 1. What this repo is
 
 - **Taste Labs AI Concierge** — core orchestrator for AI-driven customer flows.
-- **Integrations (planned / in progress)**:
-  - **HubSpot**: CRM data, contacts, deals, timelines.
-  - **WooCommerce**: product catalog, carts, orders.
-  - **Payments**: pluggable payment adapter (placeholder for now).
+- **Integrations (M1)** — adapter-based, swappable:
+  - **WooCommerce**: MCP adapter primary; fallback to REST or mock. Catalog (searchProducts, getProduct); cart in DB context.
+  - **HubSpot**: MCP test mode + REST or stub fallback. Contact upsert + deal create/update.
+  - **Payments**: pluggable adapter (placeholder for M2).
+  - See [docs/integrations.md](docs/integrations.md) and **Integrations (M1)** below for env vars and modes.
 
 ---
 
@@ -102,49 +103,43 @@ pnpm / npm / poetry / uv run db:migrate
 
 ## 5. How to run locally
 
-> **TODO:** Fill in with your actual stack (Node/Python/etc.) and commands.
+- **Prerequisites:** Node.js 18+, pnpm, Postgres (e.g. Supabase).
 
-- **Prerequisites:**
-  - **Runtime**: e.g. Node.js 20+ / Python 3.11+ / Docker.
-  - **Database**: e.g. Postgres running locally or via Docker.
+- **Env vars:** Copy `.env.example` to `.env` and set at least:
+  - `DATABASE_URL` — Postgres connection string
+  - `ORCHESTRATOR_URL` / `NEXT_PUBLIC_ORCHESTRATOR_URL` — e.g. `http://localhost:4000`
+  - For integrations see **Integrations (M1)** below and [docs/integrations.md](docs/integrations.md).
 
-- **Env vars:**
-  Create a `.env` file (or equivalent) with at least:
-  - `APP_ENV=local`
-  - `PORT=...`
-  - `DATABASE_URL=postgres://...`
-  - `HUBSPOT_API_KEY=...` or OAuth config
-  - `WOO_BASE_URL=...`
-  - `WOO_CONSUMER_KEY=...`
-  - `WOO_CONSUMER_SECRET=...`
-  - `PAYMENT_PROVIDER_API_KEY=...` (when implemented)
-
-- **Install dependencies:**
+- **Install and run:**
 
 ```bash
-# Node (example)
-npm install
-# or
 pnpm install
-
-# Python (example)
-uv sync  # or pip install -r requirements.txt
+pnpm db:migrate
+pnpm dev
 ```
 
-- **Run migrations:**
+- **Result:** Next.js chat UI on `http://localhost:3000`, orchestrator on `http://localhost:4000`.
 
-```bash
-# replace with your actual migration command
-npm run db:migrate
-```
+---
 
-- **Start the app:**
+## 5.1 Integrations (M1)
 
-```bash
-npm run dev        # or npm start / uv run app.py
-```
+Integration behavior is controlled by env flags. Flows use a **stable adapter interface** and do not depend on which backend (MCP, REST, or mock/stub) is active.
 
-Once the stack is chosen, replace the examples above with the exact commands.
+| Env var | Values | Description |
+|--------|--------|-------------|
+| `INTEGRATION_MODE_WOO` | `mcp` \| `rest` \| `mock` | WooCommerce adapter. Defaults to `mock` if MCP not configured. |
+| `MCP_WP_BASE_URL` | URL | WordPress/Woo MCP service base URL (for `mcp` mode). |
+| `MCP_WP_TOKEN` | string | Optional auth token for MCP. |
+| `INTEGRATION_MODE_HUBSPOT` | `mcp` \| `rest` \| `stub` | HubSpot adapter. |
+| `HUBSPOT_ACCESS_TOKEN` | string | Required for `rest`; optional for MCP. |
+| `HUBSPOT_PIPELINE_ID` | string | Optional pipeline for new deals. |
+| `HUBSPOT_STAGE_ID` | string | Optional stage for new deals. |
+
+- **Woo:** MCP is primary for M1; `mock` keeps the recommend/add-to-cart demo working without Woo.
+- **HubSpot:** MCP is test mode; `stub` logs actions and stores fake IDs in `CrmLink` so the demo never breaks.
+
+Full details: [docs/integrations.md](docs/integrations.md).
 
 ---
 

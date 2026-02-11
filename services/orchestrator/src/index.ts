@@ -21,6 +21,19 @@ import { logInfo, logError } from './logger';
 const app = express();
 app.use(express.json());
 
+// Simple CORS for local dev: allow Next.js app on localhost:3000
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'http://localhost:3001');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  return next();
+});
+
 const inboundSchema = z.object({
   channel: z.enum(['web', 'whatsapp', 'telegram']),
   channel_user_id: z.string().min(1),
@@ -49,6 +62,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/api/message', async (req, res) => {
+  logInfo('Received /api/message', { body: req.body });
   const parseResult = inboundSchema.safeParse(req.body);
 
   if (!parseResult.success) {
@@ -89,7 +103,7 @@ app.post('/api/message', async (req, res) => {
 
     switch (intent) {
       case 'RECOMMEND': {
-        const result = runRecommendFlow();
+        const result = await runRecommendFlow();
         replyText = result.reply;
         contextPatch = result.contextPatch;
         break;
