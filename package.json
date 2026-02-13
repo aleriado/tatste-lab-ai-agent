@@ -10,11 +10,15 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test:hubspot": "ts-node scripts/test_hubspot.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "concurrently": "^9.0.0",
+    "dotenv": "^16.6.1",
     "prisma": "^6.19.2",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.6.0"

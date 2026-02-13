@@ -64,6 +64,10 @@ export async function syncHubspotForIntent(params: {
   intent: Intent;
 }): Promise<{ contactId: string; dealId: string } | null> {
   try {
+    if (!params.customer.email && !params.customer.phone) {
+      logInfo('HubSpot sync skipped: no customer email or phone');
+      return null;
+    }
     const adapter = getHubSpotAdapter();
     const contactResult = await adapter.upsertContact({
       email: params.customer.email ?? undefined,
