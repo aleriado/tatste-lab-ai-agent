@@ -23,7 +23,7 @@ app.use(express.json());
 
 // Simple CORS for local dev: allow Next.js app on localhost:3000
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'http://localhost:3001');
+  res.header('Access-Control-Allow-Origin', 'http://localhost:3000');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -62,18 +62,19 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/api/message', async (req, res) => {
-  logInfo('Received /api/message', { body: req.body });
+  const traceId = createTraceId();
+  logInfo('Received /api/message', { traceId, body: req.body });
   const parseResult = inboundSchema.safeParse(req.body);
 
   if (!parseResult.success) {
     return res.status(400).json({
       error: 'Invalid request body',
-      details: parseResult.error.flatten()
+      details: parseResult.error.flatten(),
+      trace_id: traceId
     });
   }
 
   const payload = parseResult.data;
-  const traceId = createTraceId();
 
   try {
     const channel = toPrismaChannel(payload.channel);
@@ -146,8 +147,14 @@ app.post('/api/message', async (req, res) => {
       traceId
     });
 
+    // HubSpot sync for RECOMMEND and ADD_TO_CART (awaited to catch errors)
     if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
-      void syncHubspotForIntent({ customer, intent });
+      try {
+        await syncHubspotForIntent({ customer, intent, thread, traceId });
+      } catch (err) {
+        // Log but don't fail the request - HubSpot sync is non-blocking
+        logError('HubSpot sync failed in pipeline', { traceId, err });
+      }
     }
 
     const responseBody: OrchestratorReply = {
@@ -166,7 +173,7 @@ app.post('/api/message', async (req, res) => {
 
     return res.json(responseBody);
   } catch (err) {
-    logError('Error handling /api/message', err);
+    logError('Error handling /api/message', { traceId, err });
     return res.status(500).json({ error: 'Internal server error', trace_id: traceId });
   }
 });
