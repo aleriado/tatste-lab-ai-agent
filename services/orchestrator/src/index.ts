@@ -21,6 +21,19 @@ import { logInfo, logError } from './logger';
 const app = express();
 app.use(express.json());
 
+// Simple CORS for local dev: allow Next.js app on localhost:3000
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'http://localhost:3000');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  return next();
+});
+
 const inboundSchema = z.object({
   channel: z.enum(['web', 'whatsapp', 'telegram']),
   channel_user_id: z.string().min(1),
@@ -49,17 +62,19 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/api/message', async (req, res) => {
+  const traceId = createTraceId();
+  logInfo('Received /api/message', { traceId, body: req.body });
   const parseResult = inboundSchema.safeParse(req.body);
 
   if (!parseResult.success) {
     return res.status(400).json({
       error: 'Invalid request body',
-      details: parseResult.error.flatten()
+      details: parseResult.error.flatten(),
+      trace_id: traceId
     });
   }
 
   const payload = parseResult.data;
-  const traceId = createTraceId();
 
   try {
     const channel = toPrismaChannel(payload.channel);
@@ -89,7 +104,7 @@ app.post('/api/message', async (req, res) => {
 
     switch (intent) {
       case 'RECOMMEND': {
-        const result = runRecommendFlow();
+        const result = await runRecommendFlow();
         replyText = result.reply;
         contextPatch = result.contextPatch;
         break;
@@ -132,8 +147,14 @@ app.post('/api/message', async (req, res) => {
       traceId
     });
 
+    // HubSpot sync for RECOMMEND and ADD_TO_CART (awaited to catch errors)
     if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
-      void syncHubspotForIntent({ customer, intent });
+      try {
+        await syncHubspotForIntent({ customer, intent, thread, traceId });
+      } catch (err) {
+        // Log but don't fail the request - HubSpot sync is non-blocking
+        logError('HubSpot sync failed in pipeline', { traceId, err });
+      }
     }
 
     const responseBody: OrchestratorReply = {
@@ -152,7 +173,7 @@ app.post('/api/message', async (req, res) => {
 
     return res.json(responseBody);
   } catch (err) {
-    logError('Error handling /api/message', err);
+    logError('Error handling /api/message', { traceId, err });
     return res.status(500).json({ error: 'Internal server error', trace_id: traceId });
   }
 });

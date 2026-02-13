@@ -16,10 +16,11 @@ This repository is intended to be the central brain that:
 ## 1. What this repo is
 
 - **Taste Labs AI Concierge** — core orchestrator for AI-driven customer flows.
-- **Integrations (planned / in progress)**:
-  - **HubSpot**: CRM data, contacts, deals, timelines.
-  - **WooCommerce**: product catalog, carts, orders.
-  - **Payments**: pluggable payment adapter (placeholder for now).
+- **Integrations (M1)** — adapter-based, swappable:
+  - **WooCommerce**: MCP adapter primary; fallback to REST or mock. Catalog (searchProducts, getProduct); cart in DB context.
+  - **HubSpot**: MCP test mode + REST or stub fallback. Contact upsert + deal create/update.
+  - **Payments**: pluggable adapter (placeholder for M2).
+  - See [docs/integrations.md](docs/integrations.md) and **Integrations (M1)** below for env vars and modes.
 
 ---
 
@@ -27,8 +28,16 @@ This repository is intended to be the central brain that:
 
 - **M0 — Docs & Foundations**: ✅ **Done**
   - Project scope, high-level architecture, initial schemas and flows defined.
-- **M1 — Core Concierge Demo**: ⏳ **In progress** (or ✅ complete, update as needed)
-  - End-to-end demo for a core AI concierge flow.
+- **M1 — Core Concierge Demo**: ✅ **Complete**
+  - End-to-end demo for a core AI concierge flow:
+    - ✅ Express orchestrator with POST /api/message endpoint
+    - ✅ Next.js chat UI integration
+    - ✅ Prisma migrations applied to Supabase Postgres
+    - ✅ Session persistence via Thread.contextJson
+    - ✅ Intent routing (RECOMMEND, ADD_TO_CART, CHECKOUT_INTENT, JOIN_GROUP_ORDER)
+    - ✅ HubSpot REST adapter with contact/deal sync
+    - ✅ WooCommerce REST adapter for catalog search
+    - ✅ Full flow: recommend → add-to-cart → HubSpot write
 - **M2 — Group Order Lifecycle + Payments**: 📌 **Planned**
 - **M3 — Multi-channel Integration**: 📌 **Planned**
 
@@ -102,49 +111,45 @@ pnpm / npm / poetry / uv run db:migrate
 
 ## 5. How to run locally
 
-> **TODO:** Fill in with your actual stack (Node/Python/etc.) and commands.
+- **Prerequisites:** Node.js 18+, pnpm, Postgres (e.g. Supabase).
 
-- **Prerequisites:**
-  - **Runtime**: e.g. Node.js 20+ / Python 3.11+ / Docker.
-  - **Database**: e.g. Postgres running locally or via Docker.
+- **Env vars:** Copy `.env.example` to `.env` and set at least:
+  - `DATABASE_URL` — Postgres connection string
+  - `ORCHESTRATOR_URL` / `NEXT_PUBLIC_ORCHESTRATOR_URL` — e.g. `http://localhost:4000`
+  - For integrations see **Integrations (M1)** below and [docs/integrations.md](docs/integrations.md).
 
-- **Env vars:**
-  Create a `.env` file (or equivalent) with at least:
-  - `APP_ENV=local`
-  - `PORT=...`
-  - `DATABASE_URL=postgres://...`
-  - `HUBSPOT_API_KEY=...` or OAuth config
-  - `WOO_BASE_URL=...`
-  - `WOO_CONSUMER_KEY=...`
-  - `WOO_CONSUMER_SECRET=...`
-  - `PAYMENT_PROVIDER_API_KEY=...` (when implemented)
-
-- **Install dependencies:**
+- **Install and run:**
 
 ```bash
-# Node (example)
-npm install
-# or
-pnpm install
-
-# Python (example)
-uv sync  # or pip install -r requirements.txt
+pnpm install  # This will automatically run `prisma generate` via postinstall script
+pnpm db:migrate  # Apply database migrations
+pnpm dev  # Start both Next.js and orchestrator services
 ```
 
-- **Run migrations:**
+**Note**: If Prisma client generation fails, run `pnpm db:generate` manually.
 
-```bash
-# replace with your actual migration command
-npm run db:migrate
-```
+- **Result:** Next.js chat UI on `http://localhost:3000`, orchestrator on `http://localhost:4000`.
 
-- **Start the app:**
+---
 
-```bash
-npm run dev        # or npm start / uv run app.py
-```
+## 5.1 Integrations (M1)
 
-Once the stack is chosen, replace the examples above with the exact commands.
+Integration behavior is controlled by env flags. Flows use a **stable adapter interface** and do not depend on which backend (MCP, REST, or mock/stub) is active.
+
+| Env var | Values | Description |
+|--------|--------|-------------|
+| `INTEGRATION_MODE_WOO` | `mcp` \| `rest` \| `mock` | WooCommerce adapter. Defaults to `mock` if MCP not configured. |
+| `MCP_WP_BASE_URL` | URL | WordPress/Woo MCP service base URL (for `mcp` mode). |
+| `MCP_WP_TOKEN` | string | Optional auth token for MCP. |
+| `INTEGRATION_MODE_HUBSPOT` | `mcp` \| `rest` \| `stub` | HubSpot adapter. |
+| `HUBSPOT_ACCESS_TOKEN` | string | Required for `rest`; optional for MCP. |
+| `HUBSPOT_PIPELINE_ID` | string | Optional pipeline for new deals. |
+| `HUBSPOT_STAGE_ID` | string | Optional stage for new deals. |
+
+- **Woo:** MCP is primary for M1; `mock` keeps the recommend/add-to-cart demo working without Woo.
+- **HubSpot:** MCP is test mode; `stub` logs actions and stores fake IDs in `CrmLink` so the demo never breaks.
+
+Full details: [docs/integrations.md](docs/integrations.md).
 
 ---
 
@@ -211,7 +216,63 @@ Example structure (fill in details):
 
 ---
 
-## 8. Next steps
+## 8. Troubleshooting
+
+### HubSpot sync issues
+
+**Symptoms**: HubSpot writes not appearing in HubSpot UI or logs show errors.
+
+**Common causes:**
+- **401 Unauthorized**: `HUBSPOT_ACCESS_TOKEN` is invalid/expired
+  - Solution: Regenerate token in HubSpot Settings → Private Apps
+- **403 Forbidden**: Token lacks required scopes
+  - **Required scopes for M1:**
+    - `crm.objects.contacts.write` - Create/update contacts
+    - `crm.objects.deals.write` - Create/update deals (or `crm.objects.deals.sensitive.write.v2`)
+  - **How to fix:**
+    1. Go to HubSpot → Settings → Integrations → Private Apps
+    2. Find your private app (or create a new one)
+    3. Under "Scopes", enable:
+       - ✅ `crm.objects.contacts.write`
+       - ✅ `crm.objects.deals.write` (or `crm.objects.deals.sensitive.write.v2`)
+    4. Save and regenerate the access token
+    5. Update `HUBSPOT_ACCESS_TOKEN` in your `.env` file
+  - **Cart Information in HubSpot:**
+    - **Preferred**: If you have `crm.objects.carts.write` AND `crm.schemas.carts.write` scopes, a HubSpot Cart object is created and associated with the deal (visible in "Carts" section).
+    - **Fallback**: If cart creation fails (missing `crm.schemas.carts.write` scope), cart information is included in the deal name instead (e.g., "Taste Labs Order Intent - ADD_TO_CART (3 items: פסטה, עגבניות שלמות)").
+    - **Always**: Full cart details are stored in your database's `CrmLink.meta` field regardless of HubSpot cart creation success.
+- **429 Rate Limit**: Too many requests
+  - Solution: Wait and retry; HubSpot REST API has rate limits
+- **Missing email/phone**: Adapter creates contact with firstname/lastname only (no email)
+  - This is expected for anonymous users; contact is still created successfully
+
+**Debugging:**
+- Check orchestrator logs for messages starting with `[info] HubSpot` or `[error] HubSpot`
+- Each log includes `traceId` - use this to correlate requests
+- Verify `INTEGRATION_MODE_HUBSPOT=rest` and `HUBSPOT_ACCESS_TOKEN` is set
+- Check `CrmLink` table in Prisma Studio for stored HubSpot IDs
+
+### WooCommerce errors
+
+- **401/403**: Verify `WOO_CONSUMER_KEY` and `WOO_CONSUMER_SECRET` are correct
+- **HTTPS required**: `WOO_BASE_URL` must use HTTPS (WooCommerce REST API requirement)
+- **Connection failed**: Ensure WooCommerce site is accessible and REST API is enabled
+
+### Session not persisting
+
+- Verify `DATABASE_URL` is correct and migrations applied (`pnpm db:migrate`)
+- Check Prisma Studio: same `channel_user_id` should map to same `Customer` and `Thread`
+- Thread context (`contextJson`) stores cart and recommendations
+- Restart orchestrator and continue chat - state should persist
+
+### General debugging
+
+- All orchestrator logs include `traceId` - use this to trace requests end-to-end
+- Check Next.js console for fetch errors (CORS, network issues)
+- Verify orchestrator is running on `http://localhost:4000` (check logs on startup)
+- Use `pnpm db:studio` to inspect database state
+
+---
 
 - **M2 — Group order lifecycle + payments**
   - Model full group order lifecycle:
