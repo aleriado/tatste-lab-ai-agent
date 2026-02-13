@@ -13,11 +13,14 @@ This script walks through the Milestone 1 end‑to‑end flow:
 
 - Node.js 18+ and pnpm installed
 - Database ready and `DATABASE_URL` set in `.env`
-- Prisma migrations applied:
+- Prisma client generated and migrations applied:
 
 ```bash
-pnpm db:migrate
+pnpm install  # Generates Prisma client automatically
+pnpm db:migrate  # Apply database migrations
 ```
+
+**Note**: If you see "Cannot find module '.prisma/client/default'" errors, run `pnpm db:generate` manually.
 
 ## 2. Environment variables
 
@@ -92,10 +95,13 @@ This will start:
 
 5. **HubSpot behavior**
    - For **RECOMMEND** and **ADD_TO_CART** intents the orchestrator calls the HubSpot adapter:
-     - Upserts a **Contact** using email/phone (if present)
-     - Creates or updates a **Deal** representing this order intent
+     - Upserts a **Contact** using email/phone (if present), or creates a demo contact with `tl+{hash}@tastelabs.local` email if only `externalId` is available
+     - Creates a **Deal** with title "Taste Labs Order Intent - {INTENT}" and associates it to the contact
+     - Includes cart items in deal notes/meta when available
      - Stores the HubSpot IDs in the `CrmLink` table via `upsertCrmLink`
-   - If HubSpot env vars are not set, these calls are logged and skipped.
+     - All HubSpot operations are logged with trace_id for debugging
+   - If HubSpot env vars are not set, the adapter runs in **stub** mode and logs calls without hitting the API.
+   - **Verification**: Check orchestrator logs for HubSpot sync messages with trace_id, or query HubSpot directly to see the created contact and deal.
 
 ## 5. JOIN_GROUP_ORDER stub
 
@@ -113,6 +119,41 @@ To see the **JOIN_GROUP_ORDER** behavior:
 
 - Use `pnpm db:studio` to open Prisma Studio and inspect:
   - `Customer`, `ChannelIdentity`
-  - `Thread` + `Message` history
-  - `CrmLink` entries with HubSpot IDs
+  - `Thread` + `Message` history (check `contextJson` for cart and recommendations)
+  - `CrmLink` entries with HubSpot IDs (when HubSpot sync succeeds)
+
+## 7. Troubleshooting
+
+### HubSpot sync not working
+
+1. **Check logs**: Look for HubSpot-related log messages in the orchestrator console. Each operation includes:
+   - `traceId` - unique identifier for the request
+   - `mode` - adapter mode (rest/mcp/stub)
+   - `hasToken` - whether HUBSPOT_ACCESS_TOKEN is set
+   - Request/response details
+
+2. **Common HubSpot errors**:
+   - **401 Unauthorized**: Token is invalid or expired. Regenerate `HUBSPOT_ACCESS_TOKEN`.
+   - **403 Forbidden**: Token lacks required scopes. Ensure scopes: `crm.objects.contacts.write`, `crm.objects.deals.write`.
+   - **429 Too Many Requests**: Rate limit exceeded. HubSpot REST API has rate limits; wait and retry.
+   - **Missing scopes**: Check HubSpot private app settings and ensure all CRM write permissions are enabled.
+
+3. **No email/phone**: The adapter will create a demo contact with email `tl+{hash}@tastelabs.local` when only `externalId` is available. This is for demo purposes only.
+
+4. **Verify HubSpot writes**:
+   - Check orchestrator logs for "HubSpot sync completed" messages with `contactId` and `dealId`
+   - Query `CrmLink` table in Prisma Studio to see stored HubSpot IDs
+   - Check HubSpot UI directly for the created contact and deal
+
+### WooCommerce errors
+
+- **401/403**: Check `WOO_CONSUMER_KEY` and `WOO_CONSUMER_SECRET` are correct
+- **HTTPS required**: Ensure `WOO_BASE_URL` uses HTTPS (required by WooCommerce REST API)
+- **Connection errors**: Verify the WooCommerce site is accessible and REST API is enabled
+
+### Session continuity
+
+- Restart the orchestrator server and continue chatting with the same `channel_user_id`
+- The system should retain state (cart, recommendations) via `Thread.contextJson`
+- Verify by checking Prisma Studio: same customer ID, same thread ID, context preserved
 
