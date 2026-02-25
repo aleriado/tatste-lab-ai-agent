@@ -56,4 +56,4 @@ export function getWooAdapter(): WooCommerceAdapter {
   return cached;
 }
 
-export type { WooCommerceAdapter, WooProduct } from './types';
+export type { WooCommerceAdapter, WooProduct, WooVariation, WooProductImage } from './types';

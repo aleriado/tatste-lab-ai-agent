@@ -5,32 +5,37 @@ import {
   Channel,
   Customer,
   getOrCreateForegroundThread,
+  getOrCreateCart,
+  computeCartSummary,
+  getRecentMessages,
   MessageDirection,
+  resolveCustomer,
   Thread,
   updateThreadContext
 } from '@taste-labs/db';
-import { InboundMessagePayload, OrchestratorReply } from '@taste-labs/shared';
+import type { OrchestratorReply } from '@taste-labs/shared';
+import { runChatLoop } from './ai/chatLoop';
+import { syncHubspotForIntent } from './adapters/hubspot';
+import { getPaymentAdapter } from './adapters/payment';
+import { logInfo, logError } from './logger';
+
+// Legacy fallback imports (used when LLM is unavailable)
 import { classifyIntent } from './intent/classifier';
 import { runRecommendFlow } from './flows/recommend';
 import { runAddToCartFlow } from './flows/addToCart';
 import { runCheckoutFlow } from './flows/checkout';
 import { runJoinGroupOrderFlow } from './flows/joinGroupOrder';
-import { syncHubspotForIntent } from './adapters/hubspot';
-import { logInfo, logError } from './logger';
 
 const app = express();
 app.use(express.json());
 
-// Simple CORS for local dev: allow Next.js app on localhost:3000
+// CORS for local dev
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'http://localhost:3000');
+  const origin = req.headers.origin ?? 'http://localhost:3000';
+  res.header('Access-Control-Allow-Origin', origin);
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   return next();
 });
 
@@ -39,33 +44,32 @@ const inboundSchema = z.object({
   channel_user_id: z.string().min(1),
   text: z.string().min(1),
   email: z.string().email().optional(),
-  phone: z.string().optional()
+  phone: z.string().optional(),
+  groupOrderCode: z.string().optional()
 });
 
-function toPrismaChannel(channel: InboundMessagePayload['channel']): Channel {
+function toPrismaChannel(channel: 'web' | 'whatsapp' | 'telegram'): Channel {
   return channel;
 }
-
 function toMessageDirection(direction: 'inbound' | 'outbound'): MessageDirection {
   return direction;
 }
-
 function createTraceId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
   return Math.random().toString(36).slice(2);
 }
 
+const hasOpenAI = (): boolean => !!process.env.OPENAI_API_KEY;
+
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', mode: hasOpenAI() ? 'ai' : 'legacy' });
 });
 
 app.post('/api/message', async (req, res) => {
   const traceId = createTraceId();
   logInfo('Received /api/message', { traceId, body: req.body });
-  const parseResult = inboundSchema.safeParse(req.body);
 
+  const parseResult = inboundSchema.safeParse(req.body);
   if (!parseResult.success) {
     return res.status(400).json({
       error: 'Invalid request body',
@@ -79,7 +83,7 @@ app.post('/api/message', async (req, res) => {
   try {
     const channel = toPrismaChannel(payload.channel);
 
-    const customer: Customer = await (await import('@taste-labs/db')).resolveCustomer(
+    const customer: Customer = await resolveCustomer(
       channel,
       payload.channel_user_id,
       payload.email,
@@ -97,78 +101,146 @@ app.post('/api/message', async (req, res) => {
       traceId
     });
 
-    const intent = classifyIntent(payload.text);
+    let responseBody: OrchestratorReply;
 
-    let replyText: string;
-    let contextPatch: Record<string, unknown> = {};
+    if (hasOpenAI()) {
+      // ── M2: AI-powered chat loop ──
+      const cart = await getOrCreateCart(customer.id);
+      const cartSummary = computeCartSummary(cart);
 
-    switch (intent) {
-      case 'RECOMMEND': {
-        const result = await runRecommendFlow();
-        replyText = result.reply;
-        contextPatch = result.contextPatch;
-        break;
+      // Get recent conversation history for context
+      const recentMessages = await getRecentMessages(thread.id, 10);
+      const conversationHistory = recentMessages
+        .reverse()
+        .filter((m) => m.text)
+        .map((m) => ({
+          role: (m.direction === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: m.text!
+        }));
+
+      const result = await runChatLoop({
+        userMessage: payload.text,
+        conversationHistory,
+        systemPromptContext: {
+          cart: cartSummary,
+          groupOrderCode: payload.groupOrderCode ?? null,
+          customerPreferences: (customer.preferencesJson as Record<string, unknown>) ?? null
+        },
+        toolContext: {
+          customerId: customer.id,
+          traceId
+        }
+      });
+
+      // Determine intent from the AI interaction for CRM sync
+      const inferredIntent = inferIntent(payload.text, result);
+
+      // Run DB writes in parallel — they're independent
+      await Promise.all([
+        updateThreadContext(thread.id, { last_intent: inferredIntent }),
+        appendMessage({
+          customerId: customer.id,
+          threadId: thread.id,
+          channel,
+          direction: toMessageDirection('outbound'),
+          text: result.reply,
+          traceId,
+          meta: {
+            cards: result.cards?.length ?? 0,
+            hasCart: !!result.cart,
+            hasLink: !!result.link,
+            hasGroupOrder: !!result.groupOrder
+          }
+        })
+      ]);
+
+      // HubSpot sync for relevant intents (fire-and-forget, don't block response)
+      if (inferredIntent === 'RECOMMEND' || inferredIntent === 'ADD_TO_CART' || inferredIntent === 'CHECKOUT_INTENT') {
+        syncHubspotForIntent({ customer, intent: inferredIntent as any, thread, traceId })
+          .catch((err) => logError('HubSpot sync failed in pipeline', { traceId, err }));
       }
-      case 'ADD_TO_CART': {
-        const result = runAddToCartFlow(payload.text, thread);
-        replyText = result.reply;
-        contextPatch = result.contextPatch;
-        break;
+
+      responseBody = {
+        trace_id: traceId,
+        reply: result.reply,
+        intent: inferredIntent,
+        thread_id: thread.id,
+        cards: result.cards,
+        cart: result.cart,
+        suggestions: result.suggestions,
+        link: result.link,
+        groupOrder: result.groupOrder
+      };
+    } else {
+      // ── Legacy: rule-based fallback (M1 behavior) ──
+      const intent = classifyIntent(payload.text);
+      let replyText: string;
+      let contextPatch: Record<string, unknown> = {};
+
+      switch (intent) {
+        case 'RECOMMEND': {
+          const result = await runRecommendFlow();
+          replyText = result.reply;
+          contextPatch = result.contextPatch;
+          break;
+        }
+        case 'ADD_TO_CART': {
+          const result = runAddToCartFlow(payload.text, thread);
+          replyText = result.reply;
+          contextPatch = result.contextPatch;
+          break;
+        }
+        case 'CHECKOUT_INTENT': {
+          const result = runCheckoutFlow(thread);
+          replyText = result.reply;
+          contextPatch = result.contextPatch;
+          break;
+        }
+        case 'JOIN_GROUP_ORDER': {
+          const result = runJoinGroupOrderFlow();
+          replyText = result.reply;
+          contextPatch = result.contextPatch;
+          break;
+        }
+        default: {
+          replyText = 'I am not sure how to help with that yet.';
+          contextPatch = { last_intent: intent };
+        }
       }
-      case 'CHECKOUT_INTENT': {
-        const result = runCheckoutFlow(thread);
-        replyText = result.reply;
-        contextPatch = result.contextPatch;
-        break;
+
+      await updateThreadContext(thread.id, { ...contextPatch, last_intent: intent });
+
+      await appendMessage({
+        customerId: customer.id,
+        threadId: thread.id,
+        channel,
+        direction: toMessageDirection('outbound'),
+        text: replyText,
+        traceId
+      });
+
+      if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
+        try {
+          await syncHubspotForIntent({ customer, intent, thread, traceId });
+        } catch (err) {
+          logError('HubSpot sync failed in pipeline', { traceId, err });
+        }
       }
-      case 'JOIN_GROUP_ORDER': {
-        const result = runJoinGroupOrderFlow();
-        replyText = result.reply;
-        contextPatch = result.contextPatch;
-        break;
-      }
-      default: {
-        replyText = 'I am not sure how to help with that yet.';
-        contextPatch = { last_intent: intent };
-      }
+
+      responseBody = {
+        trace_id: traceId,
+        reply: replyText,
+        intent,
+        thread_id: thread.id
+      };
     }
-
-    await updateThreadContext(thread.id, {
-      ...contextPatch,
-      last_intent: intent
-    });
-
-    await appendMessage({
-      customerId: customer.id,
-      threadId: thread.id,
-      channel,
-      direction: toMessageDirection('outbound'),
-      text: replyText,
-      traceId
-    });
-
-    // HubSpot sync for RECOMMEND and ADD_TO_CART (awaited to catch errors)
-    if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
-      try {
-        await syncHubspotForIntent({ customer, intent, thread, traceId });
-      } catch (err) {
-        // Log but don't fail the request - HubSpot sync is non-blocking
-        logError('HubSpot sync failed in pipeline', { traceId, err });
-      }
-    }
-
-    const responseBody: OrchestratorReply = {
-      trace_id: traceId,
-      reply: replyText,
-      intent,
-      thread_id: thread.id
-    };
 
     logInfo('Handled /api/message', {
       traceId,
       customerId: customer.id,
       threadId: thread.id,
-      intent
+      mode: hasOpenAI() ? 'ai' : 'legacy',
+      intent: responseBody.intent
     });
 
     return res.json(responseBody);
@@ -178,9 +250,38 @@ app.post('/api/message', async (req, res) => {
   }
 });
 
-const port = Number(process.env.PORT ?? '4000');
+// Mock payment confirmation endpoint
+app.post('/api/mock-payment/confirm', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'token required' });
 
-app.listen(port, () => {
-  logInfo(`Orchestrator listening on port ${port}`);
+  try {
+    const payment = getPaymentAdapter();
+    const result = await payment.confirmPayment(token);
+    return res.json(result);
+  } catch (err) {
+    logError('Mock payment confirm failed', { err });
+    return res.status(400).json({ error: err instanceof Error ? err.message : 'Failed' });
+  }
 });
 
+const port = Number(process.env.PORT ?? '4000');
+app.listen(port, () => {
+  logInfo(`Orchestrator listening on port ${port} (mode: ${hasOpenAI() ? 'AI' : 'legacy'})`);
+});
+
+/**
+ * Infer intent from user text and AI result for CRM/logging purposes.
+ */
+function inferIntent(text: string, result: { cards?: unknown[]; cart?: unknown; link?: unknown; groupOrder?: unknown }): string {
+  const lower = text.toLowerCase();
+  if (result.link) return 'CHECKOUT_INTENT';
+  if (result.groupOrder) return 'GROUP_ORDER';
+  if (result.cart) return 'ADD_TO_CART';
+  if (result.cards && (result.cards as any[]).length > 0) return 'RECOMMEND';
+  if (/checkout|pay/i.test(lower)) return 'CHECKOUT_INTENT';
+  if (/\badd\b/i.test(lower)) return 'ADD_TO_CART';
+  if (/cart/i.test(lower)) return 'VIEW_CART';
+  if (/group|join/i.test(lower)) return 'GROUP_ORDER';
+  return 'GENERAL';
+}
