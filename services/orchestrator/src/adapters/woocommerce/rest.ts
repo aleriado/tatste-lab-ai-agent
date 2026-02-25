@@ -43,7 +43,8 @@ function normalizeProduct(raw: any): WooProduct {
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
-    upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : []
+    upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
+    purchasable: raw?.purchasable ?? true
   };
 }
 

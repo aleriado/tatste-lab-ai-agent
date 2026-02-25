@@ -3,9 +3,10 @@
 interface Props {
   suggestions: string[];
   onAction: (text: string) => void;
+  disabled?: boolean;
 }
 
-export default function QuickActions({ suggestions, onAction }: Props) {
+export default function QuickActions({ suggestions, onAction, disabled }: Props) {
   if (suggestions.length === 0) return null;
 
   return (
@@ -16,8 +17,9 @@ export default function QuickActions({ suggestions, onAction }: Props) {
           className="quick-action-chip"
           onClick={() => onAction(s)}
           type="button"
+          disabled={disabled}
         >
-          {s}
+          {s.replace(/\s*\[productId:\d+\]/g, '')}
         </button>
       ))}
     </div>
