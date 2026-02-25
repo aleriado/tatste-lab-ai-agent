@@ -62,12 +62,12 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'cart_add_item',
-      description: 'Add a product to the shopping cart. If the item already exists, quantity is incremented.',
+      description: 'Add a product to the shopping cart. If the item already exists, quantity is incremented. IMPORTANT: Always use quantity 1 unless the user explicitly asks for more.',
       parameters: {
         type: 'object',
         properties: {
           productId: { type: 'string', description: 'Product ID to add' },
-          quantity: { type: 'number', description: 'Quantity to add (default 1)' },
+          quantity: { type: 'number', description: 'Quantity to add. Default is 1. Only set higher if user explicitly requests multiple.' },
           variantId: { type: 'string', description: 'Variant ID if product has variations' }
         },
         required: ['productId']

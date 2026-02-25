@@ -61,6 +61,8 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
   let collectedCart: CartSnapshot | undefined;
   let collectedLink: CheckoutLink | undefined;
   let collectedGroupOrder: GroupOrderSnapshot | undefined;
+  // Prevent duplicate cart_add_item calls for the same product within one request
+  const addedProductIds = new Set<string>();
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     logInfo(`Chat loop round ${round + 1}`, { traceId: toolContext.traceId, model });
@@ -111,6 +113,20 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
       }
 
       try {
+        // Dedup: skip duplicate cart_add_item for same product in one request
+        if (fnName === 'cart_add_item') {
+          const pid = String(fnArgs.productId ?? '');
+          if (addedProductIds.has(pid)) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({ message: `Product already added to cart in this request` })
+            });
+            continue;
+          }
+          addedProductIds.add(pid);
+        }
+
         const result = await executeTool(fnName, fnArgs, toolContext);
 
         // Collect structured data for frontend
@@ -176,7 +192,7 @@ function generateSuggestions(cards: ProductCard[], cart?: CartSnapshot): string[
   const suggestions: string[] = [];
 
   for (const card of cards) {
-    suggestions.push(`Add ${card.name} to cart`);
+    suggestions.push(`Add ${card.name} to cart [productId:${card.id}]`);
   }
 
   if (cart && cart.items.length > 0) {

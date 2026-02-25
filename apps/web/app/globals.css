@@ -60,6 +60,32 @@ body {
   background: rgba(6, 95, 70, 0.2);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lang-toggle {
+  background: none;
+  border: 1px solid rgba(75, 85, 99, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+  line-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lang-toggle svg {
+  border-radius: 2px;
+}
+.lang-toggle:hover {
+  border-color: #38bdf8;
+  transform: scale(1.1);
+}
+
 /* ── Custom Scrollbar ── */
 
 ::-webkit-scrollbar {
@@ -207,9 +233,42 @@ body {
 .product-action-btn:hover {
   opacity: 0.85;
 }
+.product-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.product-card.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.product-card.disabled .product-action-btn.detail {
+  pointer-events: auto;
+  opacity: 1;
+}
 .product-action-btn.add {
   background: linear-gradient(to right, #22c55e, #4ade80);
   color: #022c22;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.6rem;
+}
+.product-action-btn.add.loading {
+  pointer-events: none;
+  opacity: 0.75;
+}
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(2, 44, 34, 0.3);
+  border-top-color: #022c22;
+  border-radius: 50%;
+  animation: btnSpin 0.6s linear infinite;
+}
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
 }
 .product-action-btn.detail {
   background: rgba(71, 85, 105, 0.6);
@@ -316,6 +375,10 @@ body {
 .quick-action-chip:hover {
   background: rgba(56, 189, 248, 0.18);
   border-color: rgba(56, 189, 248, 0.7);
+}
+.quick-action-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Link bubble ── */

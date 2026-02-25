@@ -209,6 +209,11 @@ export async function addCartItem(customerId: string, input: AddCartItemInput): 
   const cart = await ensureCart(customerId);
   const qty = input.quantity ?? 1;
 
+  // Safety: reject invalid prices
+  if (isNaN(input.unitPrice) || input.unitPrice < 0) {
+    throw new Error(`Invalid unit price: ${input.unitPrice}`);
+  }
+
   const existing = input.variantId
     ? await prisma.cartItem.findUnique({
         where: { cartId_productId_variantId: { cartId: cart.id, productId: input.productId, variantId: input.variantId } }
