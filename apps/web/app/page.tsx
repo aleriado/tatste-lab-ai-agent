@@ -26,7 +26,7 @@ type ChatMessage = {
 };
 
 const ORCHESTRATOR_BASE =
-  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:4000";
+  process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:5501";
 
 function getOrCreateChannelUserId(): string {
   if (typeof window === "undefined") return "web-anon";
@@ -57,7 +57,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isSending]);
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
@@ -165,6 +165,20 @@ export default function ChatPage() {
               )}
             </div>
           ))}
+
+          {isSending && (
+            <div className="message-row bot">
+              <div className="typing-indicator">
+                <div className="typing-dots">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </div>
+                <span className="typing-text">Thinking...</span>
+              </div>
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
