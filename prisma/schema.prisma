@@ -61,6 +61,15 @@ enum IntegrationStatus {
   disabled
 }
 
+enum GroupOrderStatus {
+  DRAFT
+  OPEN
+  MOQ_REACHED
+  EXPIRED
+  CHECKOUT_STARTED
+  CONFIRMED
+}
+
 //
 // Core: Customer + Identity
 //
@@ -94,6 +103,9 @@ model Customer {
   crmLinks   CrmLink[]
   commerceLinks CommerceLink[]
   idempotencyKeys IdempotencyKey[]
+  cart       Cart?
+  groupOrderParticipants GroupOrderParticipant[]
+  createdGroupOrders     GroupOrder[] @relation("GroupOrderCreator")
 
   @@index([email])
   @@index([phone])
@@ -290,8 +302,7 @@ model IntegrationAccount {
 }
 
 //
-// M2-ready placeholder (very light): GroupOrder
-// Not required for M1 logic, but helps you avoid schema churn later.
+// M2: GroupOrder with full lifecycle
 //
 
 model GroupOrder {
@@ -299,21 +310,133 @@ model GroupOrder {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  code String @unique @db.VarChar(8) // shareable join code
+
+  createdByCustomerId String
+  createdByCustomer   Customer @relation("GroupOrderCreator", fields: [createdByCustomerId], references: [id])
+
   // Manufacturer constraint (Gil)
   manufacturerId String? @db.VarChar(128)
 
-  state String @default("DRAFT") @db.VarChar(32) // OPEN, MOQ_MET, CONFIRMED, etc.
-  constraintsJson Json? // max SKUs/plate, boxes/layer rules, product pallet params, etc.
+  status GroupOrderStatus @default(DRAFT)
+  constraintsJson Json?
 
-  // Basic progress
-  moqTarget Int?
-  moqCurrent Int?
+  // MOQ tracking
+  moqTarget  Int @default(1)
+  moqCurrent Int @default(0)
 
   expiresAt DateTime?
 
   meta Json?
 
+  // Relations
+  participants GroupOrderParticipant[]
+  items        GroupOrderItem[]
+
   @@index([manufacturerId])
-  @@index([state])
+  @@index([status])
+  @@index([code])
+}
+
+model GroupOrderParticipant {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  groupOrderId String
+  groupOrder   GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  @@unique([groupOrderId, customerId])
+  @@index([groupOrderId])
+}
+
+model GroupOrderItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groupOrderId String
+  groupOrder   GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+
+  customerId String // who added this item
+
+  productId  String
+  variantId  String?
+  name       String
+  imageUrl   String?
+  unitPrice  Decimal  @db.Decimal(10, 2)
+  quantity   Int      @default(1)
+  metadata   Json?
+
+  @@index([groupOrderId])
+  @@index([groupOrderId, customerId])
+}
+
+//
+// M2: Cart (persistent, replaces contextJson.cart)
+//
+
+model Cart {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String   @unique
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  currency String @default("ILS")
+
+  items CartItem[]
+
+  @@index([customerId])
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cartId String
+  cart   Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  productId String
+  variantId String?
+  name      String
+  imageUrl  String?
+  unitPrice Decimal @db.Decimal(10, 2)
+  quantity  Int     @default(1)
+  metadata  Json?
+
+  @@unique([cartId, productId, variantId])
+  @@index([cartId])
+}
+
+//
+// M2: Checkout session (mock payment tracking)
+//
+
+model CheckoutSession {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId    String
+  groupOrderId  String? // null for individual checkout
+
+  token    String @unique @db.VarChar(64)
+  status   String @default("pending") @db.VarChar(32) // pending, paid, failed
+  currency String @default("ILS")
+
+  totalAmount    Decimal @db.Decimal(10, 2)
+  amountDueNow   Decimal @db.Decimal(10, 2) // 50%
+  amountDueLater Decimal @db.Decimal(10, 2) // 50%
+  paidAmount     Decimal @default(0) @db.Decimal(10, 2)
+
+  meta Json?
+
+  @@index([customerId])
+  @@index([token])
 }
 
