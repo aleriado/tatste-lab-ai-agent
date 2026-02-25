@@ -66,10 +66,14 @@ export async function executeTool(
     // ── Cart tools ──
     case 'cart_add_item': {
       const productId = args.productId as string;
-      const quantity = Math.max(1, Math.round((args.quantity as number) ?? 1));
       const variantId = (args.variantId as string) ?? null;
 
-      logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, raw_qty=${args.quantity}`, { traceId: ctx.traceId });
+      // Force quantity to 1 — the AI sometimes hallucinates quantity > 1.
+      // If the user truly wants more, they can click again or say "add 3".
+      // The DB layer increments existing items, so repeated adds still stack.
+      const quantity = 1;
+
+      logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, ai_requested_qty=${args.quantity}`, { traceId: ctx.traceId });
 
       // Fetch product info from Woo to get name/price/image
       const product = await woo.getProduct(productId);

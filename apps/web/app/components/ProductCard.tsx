@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ProductCard as ProductCardType } from "@taste-labs/shared";
 import type { UiText } from "../page";
 
@@ -15,6 +15,7 @@ interface Props {
 
 export default function ProductCard({ product, index, onAction, disabled, loading, t }: Props) {
   const [showModal, setShowModal] = useState(false);
+  const addGuardRef = useRef(false);
 
   useEffect(() => {
     if (showModal) {
@@ -22,10 +23,25 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
     } else {
       document.body.style.overflow = "";
     }
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [showModal]);
 
+  // Reset local click guard whenever parent loading flag is cleared
+  useEffect(() => {
+    if (!loading) {
+      addGuardRef.current = false;
+    }
+  }, [loading]);
+
   const addText = `Add ${product.name} to cart [productId:${product.id}]`;
+
+  const handleAdd = () => {
+    if (loading || disabled || addGuardRef.current) return;
+    addGuardRef.current = true;
+    onAction?.(addText);
+  };
 
   return (
     <>
@@ -44,7 +60,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
           <div className="product-actions">
             <button
               className={`product-action-btn add ${loading ? "loading" : ""}`}
-              onClick={() => !loading && onAction?.(addText)}
+              onClick={handleAdd}
               type="button"
               disabled={disabled || loading}
             >
@@ -89,7 +105,12 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
               )}
               <button
                 className="modal-add-btn"
-                onClick={() => { if (!loading) { onAction?.(addText); setShowModal(false); } }}
+                onClick={() => {
+                  handleAdd();
+                  if (!loading) {
+                    setShowModal(false);
+                  }
+                }}
                 type="button"
                 disabled={disabled || loading}
               >
