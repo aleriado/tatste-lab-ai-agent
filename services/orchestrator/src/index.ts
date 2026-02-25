@@ -30,9 +30,19 @@ const app = express();
 app.use(express.json());
 
 // CORS for local dev
+const ALLOWED_ORIGINS = new Set([
+  'http://localhost:3301',
+  'http://solguardian.xyz',
+  'https://solguardian.xyz',
+  'http://www.solguardian.xyz',
+  'https://www.solguardian.xyz',
+]);
+
 app.use((req, res, next) => {
-  const origin = req.headers.origin ?? 'http://localhost:3000';
-  res.header('Access-Control-Allow-Origin', origin);
+  const origin = req.headers.origin ?? '';
+  if (ALLOWED_ORIGINS.has(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
