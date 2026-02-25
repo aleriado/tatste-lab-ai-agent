@@ -21,6 +21,7 @@ export interface WooProduct {
   relatedIds?: number[];
   crossSellIds?: number[];
   upsellIds?: number[];
+  purchasable?: boolean;
 }
 
 export interface WooVariation {

@@ -66,19 +66,33 @@ export async function executeTool(
     // ── Cart tools ──
     case 'cart_add_item': {
       const productId = args.productId as string;
-      const quantity = (args.quantity as number) ?? 1;
+      const quantity = Math.max(1, Math.round((args.quantity as number) ?? 1));
       const variantId = (args.variantId as string) ?? null;
+
+      logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, raw_qty=${args.quantity}`, { traceId: ctx.traceId });
 
       // Fetch product info from Woo to get name/price/image
       const product = await woo.getProduct(productId);
       if (!product) return { data: { error: `Product ${productId} not found in catalog` } };
+
+      // Validate purchasable & price before adding
+      if (product.purchasable === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
+      }
+      const unitPrice = parseFloat(product.price ?? '');
+      if (!product.price || product.price.trim() === '' || isNaN(unitPrice) || unitPrice <= 0) {
+        return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added to cart.` } };
+      }
+      if (product.inStock === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
+      }
 
       const cart = await addCartItem(ctx.customerId, {
         productId,
         variantId,
         name: product.name,
         imageUrl: product.images?.[0]?.src ?? null,
-        unitPrice: parseFloat(product.price ?? '0'),
+        unitPrice,
         quantity
       });
 
@@ -178,12 +192,21 @@ export async function executeTool(
       const product = await woo.getProduct(productId);
       if (!product) return { data: { error: `Product ${productId} not found` } };
 
+      // Validate purchasable & price
+      if (product.purchasable === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
+      }
+      const groupUnitPrice = parseFloat(product.price ?? '');
+      if (!product.price || product.price.trim() === '' || isNaN(groupUnitPrice) || groupUnitPrice <= 0) {
+        return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added.` } };
+      }
+
       const go = await addGroupOrderItem(args.code as string, ctx.customerId, {
         productId,
         variantId: (args.variantId as string) ?? null,
         name: product.name,
         imageUrl: product.images?.[0]?.src ?? null,
-        unitPrice: parseFloat(product.price ?? '0'),
+        unitPrice: groupUnitPrice,
         quantity: (args.quantity as number) ?? 1
       });
       return { data: go };

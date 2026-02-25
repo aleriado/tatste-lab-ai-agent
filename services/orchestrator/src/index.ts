@@ -32,6 +32,7 @@ app.use(express.json());
 // CORS for local dev
 const ALLOWED_ORIGINS = new Set([
   'http://localhost:3301',
+  'http://localhost:3302',
   'http://solguardian.xyz',
   'https://solguardian.xyz',
   'http://www.solguardian.xyz',

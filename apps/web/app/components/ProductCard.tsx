@@ -2,14 +2,18 @@
 
 import { useState, useEffect } from "react";
 import type { ProductCard as ProductCardType } from "@taste-labs/shared";
+import type { UiText } from "../page";
 
 interface Props {
   product: ProductCardType;
   index: number;
   onAction?: (text: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+  t: UiText;
 }
 
-export default function ProductCard({ product, index, onAction }: Props) {
+export default function ProductCard({ product, index, onAction, disabled, loading, t }: Props) {
   const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
@@ -21,6 +25,8 @@ export default function ProductCard({ product, index, onAction }: Props) {
     return () => { document.body.style.overflow = ""; };
   }, [showModal]);
 
+  const addText = `Add ${product.name} to cart [productId:${product.id}]`;
+
   return (
     <>
       <div className="product-card">
@@ -30,26 +36,33 @@ export default function ProductCard({ product, index, onAction }: Props) {
           </div>
         )}
         <div className="product-info">
-          <div className="product-name">
-            <span className="product-index">#{index + 1}</span> {product.name}
-          </div>
+          <div className="product-name">{product.name}</div>
           {product.price && <div className="product-price">₪{product.price}</div>}
           {product.shortDescription && (
             <div className="product-desc">{product.shortDescription}</div>
           )}
           <div className="product-actions">
-            <button className="product-action-btn add" onClick={() => onAction?.(`Add ${product.name} to cart`)} type="button">
-              Add to cart
+            <button
+              className={`product-action-btn add ${loading ? "loading" : ""}`}
+              onClick={() => !loading && onAction?.(addText)}
+              type="button"
+              disabled={disabled || loading}
+            >
+              {loading ? <span className="btn-spinner" /> : t.addToCart}
             </button>
-            <button className="product-action-btn detail" onClick={() => setShowModal(true)} type="button">
-              Details
+            <button
+              className="product-action-btn detail"
+              onClick={() => setShowModal(true)}
+              type="button"
+            >
+              {t.details}
             </button>
           </div>
         </div>
       </div>
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)} role="dialog" aria-modal="true" aria-label={`Details for ${product.name}`}>
+        <div className="modal-overlay" onClick={() => setShowModal(false)} role="dialog" aria-modal="true" aria-label={`${t.details} - ${product.name}`}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <button className="modal-close" onClick={() => setShowModal(false)} type="button" aria-label="Close">✕</button>
             {product.imageUrl && (
@@ -65,7 +78,7 @@ export default function ProductCard({ product, index, onAction }: Props) {
               {product.price && <div className="modal-price">₪{product.price}</div>}
               {product.inStock !== undefined && (
                 <div className={`modal-stock ${product.inStock ? "in" : "out"}`}>
-                  {product.inStock ? "In Stock" : "Out of Stock"}
+                  {product.inStock ? t.inStock : t.outOfStock}
                 </div>
               )}
               {product.description && (
@@ -74,8 +87,13 @@ export default function ProductCard({ product, index, onAction }: Props) {
               {!product.description && product.shortDescription && (
                 <div className="modal-description">{product.shortDescription}</div>
               )}
-              <button className="modal-add-btn" onClick={() => { onAction?.(`Add ${product.name} to cart`); setShowModal(false); }} type="button">
-                Add to cart
+              <button
+                className="modal-add-btn"
+                onClick={() => { if (!loading) { onAction?.(addText); setShowModal(false); } }}
+                type="button"
+                disabled={disabled || loading}
+              >
+                {t.addToCart}
               </button>
             </div>
           </div>

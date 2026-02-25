@@ -1,22 +1,25 @@
 "use client";
 
 import type { CartSnapshot } from "@taste-labs/shared";
+import type { UiText } from "../page";
 
 interface Props {
   cart: CartSnapshot;
   onAction?: (text: string) => void;
+  disabled?: boolean;
+  t: UiText;
 }
 
-export default function CartSummary({ cart, onAction }: Props) {
+export default function CartSummary({ cart, onAction, disabled, t }: Props) {
   if (cart.items.length === 0) {
-    return <div className="cart-summary empty">Your cart is empty.</div>;
+    return <div className="cart-summary empty">{t.emptyCart}</div>;
   }
 
   return (
     <div className="cart-summary">
       <div className="cart-header-row">
-        <span className="cart-label">Shopping Cart</span>
-        <span className="cart-count">{cart.itemCount} items</span>
+        <span className="cart-label">{t.shoppingCart}</span>
+        <span className="cart-count">{cart.itemCount} {t.items}</span>
       </div>
       <div className="cart-items">
         {cart.items.map((item, idx) => (
@@ -30,23 +33,15 @@ export default function CartSummary({ cart, onAction }: Props) {
         ))}
       </div>
       <div className="cart-total-row">
-        <span>Total</span>
+        <span>{t.total}</span>
         <span className="cart-total-amount">{cart.currency} {cart.total}</span>
       </div>
       <div className="cart-actions">
-        <button
-          className="product-action-btn add"
-          onClick={() => onAction?.("Checkout")}
-          type="button"
-        >
-          Checkout
+        <button className="product-action-btn add" onClick={() => onAction?.("Checkout")} type="button" disabled={disabled}>
+          {t.checkout}
         </button>
-        <button
-          className="product-action-btn detail"
-          onClick={() => onAction?.("Clear my cart")}
-          type="button"
-        >
-          Clear cart
+        <button className="product-action-btn detail" onClick={() => onAction?.("Clear my cart")} type="button" disabled={disabled}>
+          {t.clearCart}
         </button>
       </div>
     </div>

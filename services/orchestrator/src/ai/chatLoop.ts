@@ -176,7 +176,7 @@ function generateSuggestions(cards: ProductCard[], cart?: CartSnapshot): string[
   const suggestions: string[] = [];
 
   for (const card of cards) {
-    suggestions.push(`Add ${card.name} to cart`);
+    suggestions.push(`Add ${card.name} to cart [productId:${card.id}]`);
   }
 
   if (cart && cart.items.length > 0) {

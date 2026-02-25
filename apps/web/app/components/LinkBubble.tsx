@@ -1,12 +1,14 @@
 "use client";
 
 import type { CheckoutLink } from "@taste-labs/shared";
+import type { UiText } from "../page";
 
 interface Props {
   link: CheckoutLink;
+  t: UiText;
 }
 
-export default function LinkBubble({ link }: Props) {
+export default function LinkBubble({ link, t }: Props) {
   return (
     <div className="link-bubble">
       <a
@@ -15,12 +17,12 @@ export default function LinkBubble({ link }: Props) {
         rel="noopener noreferrer"
         className="link-bubble-btn"
       >
-        {link.label}
+        {t.completePayment}
       </a>
       {link.amountDueNow && (
         <div className="link-bubble-split">
-          <span>Due now: ₪{link.amountDueNow}</span>
-          {link.amountDueLater && <span>Due later: ₪{link.amountDueLater}</span>}
+          <span>{t.dueNow}: ₪{link.amountDueNow}</span>
+          {link.amountDueLater && <span>{t.dueLater}: ₪{link.amountDueLater}</span>}
         </div>
       )}
     </div>
