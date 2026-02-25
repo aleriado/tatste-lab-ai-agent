@@ -5,6 +5,8 @@
   "packageManager": "pnpm@9.0.0",
   "scripts": {
     "dev": "concurrently -n web,orchestrator -c cyan,magenta \"pnpm --filter web dev\" \"pnpm --filter orchestrator dev\"",
+    "build": "pnpm --filter @taste-labs/shared run build && pnpm --filter @taste-labs/db run build && pnpm --filter orchestrator run build && pnpm --filter web run build",
+    "start": "concurrently -n web,orchestrator -c cyan,magenta \"pnpm --filter web start\" \"pnpm --filter orchestrator start\"",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "postinstall": "prisma generate",
