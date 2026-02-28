@@ -19,7 +19,7 @@ type Lang = "en" | "he";
 
 export interface UiText {
   title: string; subtitle: string; placeholder: string; send: string;
-  welcome: string; suggest1: string; suggest2: string; suggest3: string;
+  welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -43,7 +43,7 @@ const ORCHESTRATOR_BASE =
 
 const UI_TEXT: Record<Lang, {
   title: string; subtitle: string; placeholder: string; send: string;
-  welcome: string; suggest1: string; suggest2: string; suggest3: string;
+  welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -60,6 +60,8 @@ const UI_TEXT: Record<Lang, {
     suggest1: "What do you recommend?",
     suggest2: "Show me what you have",
     suggest3: "What's popular?",
+    suggest4: "Create a group order",
+    suggest5: "Show open group orders",
     thinking: "Thinking...",
     error: "Something went wrong. Please try again.",
     addToCart: "Add to cart",
@@ -88,6 +90,8 @@ const UI_TEXT: Record<Lang, {
     suggest1: "מה אתם ממליצים?",
     suggest2: "הראו לי מה יש לכם",
     suggest3: "מה פופולרי?",
+    suggest4: "צור הזמנה קבוצתית",
+    suggest5: "הצג הזמנות קבוצתיות פתוחות",
     thinking: "חושב...",
     error: "משהו השתבש. נסו שוב.",
     addToCart: "הוסף לסל",
@@ -126,7 +130,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([{
     from: "bot",
     text: "__WELCOME__",
-    suggestions: ["__SUGGEST1__", "__SUGGEST2__", "__SUGGEST3__"],
+    suggestions: ["__SUGGEST1__", "__SUGGEST2__", "__SUGGEST3__", "__SUGGEST4__", "__SUGGEST5__"],
   }]);
   const [input, setInput] = useState("");
   const [channelUserId, setChannelUserId] = useState<string>("web-anon");
@@ -142,7 +146,9 @@ export default function ChatPage() {
       .replace("__WELCOME__", t.welcome)
       .replace("__SUGGEST1__", t.suggest1)
       .replace("__SUGGEST2__", t.suggest2)
-      .replace("__SUGGEST3__", t.suggest3);
+      .replace("__SUGGEST3__", t.suggest3)
+      .replace("__SUGGEST4__", t.suggest4)
+      .replace("__SUGGEST5__", t.suggest5);
   }
 
   useEffect(() => {

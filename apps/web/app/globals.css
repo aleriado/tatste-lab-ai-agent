@@ -490,6 +490,62 @@ body {
   margin-top: 0.2rem;
 }
 
+.group-order-meta-row {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: #cbd5e1;
+}
+
+.group-order-layer-card {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.group-order-layer-title {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.group-order-layer-summary {
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+}
+
+.group-order-layer-list {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.group-order-layer-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  color: #94a3b8;
+}
+
+.group-order-layer-product {
+  color: #7dd3fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.group-order-layer-stats {
+  text-align: right;
+}
+
+.group-order-layer-dot {
+  display: inline-block;
+  margin: 0 0.25rem;
+  color: #64748b;
+}
+
 /* ── Footer ── */
 
 /* ── Typing indicator ── */

@@ -18,7 +18,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_a',
+    manufacturerName: 'Mock Manufacturer A',
+    boxesPerLayer: 6
   },
   {
     id: 'item_2',
@@ -32,7 +35,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_a',
+    manufacturerName: 'Mock Manufacturer A',
+    boxesPerLayer: 8
   },
   {
     id: 'item_3',
@@ -46,7 +52,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_a',
+    manufacturerName: 'Mock Manufacturer A',
+    boxesPerLayer: 10
   },
   {
     id: 'item_4',
@@ -60,7 +69,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_b',
+    manufacturerName: 'Mock Manufacturer B',
+    boxesPerLayer: 5
   },
   {
     id: 'item_5',
@@ -74,7 +86,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_b',
+    manufacturerName: 'Mock Manufacturer B',
+    boxesPerLayer: 12
   },
   {
     id: 'item_6',
@@ -88,7 +103,10 @@ const MOCK_PRODUCTS: WooProduct[] = [
     inStock: true,
     relatedIds: [],
     crossSellIds: [],
-    upsellIds: []
+    upsellIds: [],
+    manufacturerId: 'mock_manufacturer_b',
+    manufacturerName: 'Mock Manufacturer B',
+    boxesPerLayer: 9
   }
 ];
 

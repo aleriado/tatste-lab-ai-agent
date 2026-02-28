@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   appendMessage,
   Channel,
+  cleanupExpiredGroupOrders,
   Customer,
   getOrCreateForegroundThread,
   getOrCreateCart,
@@ -279,6 +280,21 @@ app.post('/api/mock-payment/confirm', async (req, res) => {
 const port = Number(process.env.PORT ?? '4000');
 app.listen(port, () => {
   logInfo(`Orchestrator listening on port ${port} (mode: ${hasOpenAI() ? 'AI' : 'legacy'})`);
+
+  const runCleanup = async () => {
+    try {
+      const result = await cleanupExpiredGroupOrders();
+      if (result.markedExpired > 0 || result.deleted > 0) {
+        logInfo('Group order cleanup', result);
+      }
+    } catch (err) {
+      logError('Group order cleanup failed', { err });
+    }
+  };
+
+  // Initial run shortly after startup, then periodically.
+  setTimeout(runCleanup, 10_000);
+  setInterval(runCleanup, 5 * 60 * 1000);
 });
 
 /**

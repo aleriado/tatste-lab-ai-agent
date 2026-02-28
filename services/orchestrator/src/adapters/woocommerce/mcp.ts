@@ -8,7 +8,39 @@ import { mcpGet } from '../mcpClient';
 import type { WooCommerceAdapter, WooProduct, WooVariation } from './types';
 import { logInfo, logError } from '../../logger';
 
+function readMeta(raw: any, keys: string[]): unknown {
+  const keySet = new Set(keys.map((k) => k.toLowerCase()));
+  const meta = Array.isArray(raw?.meta_data) ? raw.meta_data : [];
+  for (const entry of meta) {
+    const key = String(entry?.key ?? '').toLowerCase();
+    if (keySet.has(key)) return entry?.value;
+  }
+  for (const key of keys) {
+    if (raw?.[key] !== undefined && raw?.[key] !== null && raw?.[key] !== '') return raw[key];
+  }
+  return undefined;
+}
+
+function toPositiveInt(value: unknown): number | undefined {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return undefined;
+  return Math.floor(num);
+}
+
 function normalizeProduct(raw: any): WooProduct {
+  const manufacturerIdRaw =
+    readMeta(raw, ['manufacturer_id', 'manufacturerId', 'supplier_id', 'vendor_id', 'brand_id']) ??
+    raw?.brands?.[0]?.id;
+  const manufacturerNameRaw =
+    readMeta(raw, ['manufacturer_name', 'manufacturer', 'supplier', 'vendor', 'brand']) ??
+    raw?.brands?.[0]?.name;
+  const boxesPerLayerRaw = readMeta(raw, [
+    'boxes_per_layer',
+    'box_per_layer',
+    'cartons_per_layer',
+    'units_per_layer'
+  ]);
+
   return {
     id: String(raw?.id ?? raw?.product_id ?? ''),
     name: String(raw?.name ?? raw?.title ?? ''),
@@ -26,7 +58,15 @@ function normalizeProduct(raw: any): WooProduct {
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
-    upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : []
+    upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
+    manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
+    manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+    boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
+    metadata: {
+      manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
+      manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+      boxesPerLayer: toPositiveInt(boxesPerLayerRaw)
+    }
   };
 }
 

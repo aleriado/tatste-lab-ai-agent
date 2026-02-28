@@ -294,11 +294,24 @@ export interface GroupOrderFull {
   status: GroupOrderStatus;
   moqTarget: number;
   moqCurrent: number;
+  manufacturerId: string | null;
   expiresAt: Date | null;
   createdByCustomerId: string;
   participants: { customerId: string; createdAt: Date }[];
   items: { id: string; customerId: string; productId: string; variantId: string | null; name: string; imageUrl: string | null; unitPrice: string; quantity: number }[];
   participantCount: number;
+  progress: {
+    balancedLayers: number;
+    totalBoxes: number;
+    remainingToTarget: number;
+    productLayers: {
+      productId: string;
+      quantity: number;
+      boxesPerLayer: number;
+      completedLayers: number;
+      openedLayers: number;
+    }[];
+  };
 }
 
 export interface AddGroupOrderItemInput {
@@ -311,6 +324,29 @@ export interface AddGroupOrderItemInput {
   metadata?: unknown;
 }
 
+interface GroupOrderItemRuleMetadata {
+  manufacturerId?: string;
+  manufacturerName?: string;
+  boxesPerLayer?: number;
+}
+
+export interface DiscoverableGroupOrder {
+  code: string;
+  status: GroupOrderStatus;
+  manufacturerId: string | null;
+  moqTarget: number;
+  moqCurrent: number;
+  remainingToTarget: number;
+  participantCount: number;
+  expiresAt: Date | null;
+}
+
+export interface DeleteGroupOrderResult {
+  code: string;
+  deleted: true;
+  deletedAt: Date;
+}
+
 function generateGroupCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -319,16 +355,80 @@ function generateGroupCode(): string {
 }
 
 async function recalcMoq(groupOrderId: string): Promise<number> {
-  const result = await prisma.groupOrderItem.aggregate({ where: { groupOrderId }, _sum: { quantity: true } });
-  const moqCurrent = result._sum.quantity ?? 0;
-  const go = await prisma.groupOrder.findUnique({ where: { id: groupOrderId } });
-  if (!go) return moqCurrent;
+  const go = await prisma.groupOrder.findUnique({
+    where: { id: groupOrderId },
+    include: {
+      items: {
+        select: {
+          productId: true,
+          variantId: true,
+          quantity: true,
+          metadata: true
+        }
+      }
+    }
+  });
+  if (!go) return 0;
+
+  const grouped = new Map<string, { productId: string; quantity: number; boxesPerLayer: number }>();
+  for (const item of go.items) {
+    const key = `${item.productId}:${item.variantId ?? ''}`;
+    const meta = ((item.metadata as GroupOrderItemRuleMetadata | null) ?? {});
+    const boxesPerLayerRaw = Number(meta.boxesPerLayer ?? 1);
+    const boxesPerLayer = Number.isFinite(boxesPerLayerRaw) && boxesPerLayerRaw > 0
+      ? Math.floor(boxesPerLayerRaw)
+      : 1;
+
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+    } else {
+      grouped.set(key, { productId: item.productId, quantity: item.quantity, boxesPerLayer });
+    }
+  }
+
+  const productLayers = Array.from(grouped.values()).map((entry) => {
+    const completedLayers = Math.floor(entry.quantity / entry.boxesPerLayer);
+    const openedLayers = Math.ceil(entry.quantity / entry.boxesPerLayer);
+    return {
+      productId: entry.productId,
+      quantity: entry.quantity,
+      boxesPerLayer: entry.boxesPerLayer,
+      completedLayers,
+      openedLayers
+    };
+  });
+
+  // Rule implementation:
+  // - One product: MOQ progress is live by quantity.
+  // - Multiple products: progress follows the product with fewer completed layers.
+  const moqCurrent = productLayers.length <= 1
+    ? (productLayers[0]?.quantity ?? 0)
+    : productLayers.reduce(
+        (sum, p) => sum + (Math.min(...productLayers.map((x) => x.completedLayers)) * p.boxesPerLayer),
+        0
+      );
+
+  const balancedLayers = productLayers.length === 0
+    ? 0
+    : Math.min(...productLayers.map((p) => p.completedLayers));
+  const totalBoxes = productLayers.reduce((sum, p) => sum + p.quantity, 0);
+
+  const progressMeta = {
+    balancedLayers,
+    totalBoxes,
+    remainingToTarget: Math.max(0, go.moqTarget - moqCurrent),
+    productLayers
+  };
 
   let newStatus: GroupOrderStatus = go.status;
   if (go.status === 'OPEN' && moqCurrent >= go.moqTarget) newStatus = 'MOQ_REACHED';
   else if (go.status === 'MOQ_REACHED' && moqCurrent < go.moqTarget) newStatus = 'OPEN';
 
-  await prisma.groupOrder.update({ where: { id: groupOrderId }, data: { moqCurrent, status: newStatus } });
+  await prisma.groupOrder.update({
+    where: { id: groupOrderId },
+    data: { moqCurrent, status: newStatus, meta: progressMeta as any }
+  });
   return moqCurrent;
 }
 
@@ -342,11 +442,11 @@ function checkExpiry(go: { id: string; status: GroupOrderStatus; expiresAt: Date
 export async function createGroupOrder(customerId: string, moqTarget: number, deadlineHours?: number): Promise<GroupOrderFull> {
   const code = generateGroupCode();
   const expiresAt = deadlineHours ? new Date(Date.now() + deadlineHours * 60 * 60 * 1000) : null;
-  await prisma.groupOrder.create({
+  const created = await prisma.groupOrder.create({
     data: { code, createdByCustomerId: customerId, status: 'OPEN', moqTarget, moqCurrent: 0, expiresAt }
   });
   await prisma.groupOrderParticipant.create({
-    data: { groupOrderId: (await prisma.groupOrder.findUnique({ where: { code } }))!.id, customerId }
+    data: { groupOrderId: created.id, customerId }
   });
   return getGroupOrderStatus(code);
 }
@@ -371,7 +471,36 @@ export async function leaveGroupOrder(code: string, customerId: string): Promise
   await prisma.groupOrderParticipant.deleteMany({ where: { groupOrderId: go.id, customerId } });
   await prisma.groupOrderItem.deleteMany({ where: { groupOrderId: go.id, customerId } });
   await recalcMoq(go.id);
+
+  // Prevent orphan active orders: if no participants remain, mark as expired.
+  // Cleanup policy will hard-delete expired orders.
+  const participantsLeft = await prisma.groupOrderParticipant.count({ where: { groupOrderId: go.id } });
+  if (participantsLeft === 0) {
+    await prisma.groupOrder.update({
+      where: { id: go.id },
+      data: {
+        status: 'EXPIRED',
+        expiresAt: new Date(),
+        meta: {
+          ...(go.meta as Record<string, unknown> ?? {}),
+          orphanedAt: new Date().toISOString(),
+          orphanedReason: 'No participants left'
+        } as any
+      }
+    });
+  }
+
   return getGroupOrderStatus(code);
+}
+
+export async function deleteGroupOrderByCreator(code: string, actorCustomerId: string): Promise<DeleteGroupOrderResult> {
+  const go = await prisma.groupOrder.findUnique({ where: { code } });
+  if (!go) throw new Error(`Group order ${code} not found`);
+  if (go.createdByCustomerId !== actorCustomerId) {
+    throw new Error(`Only the group order creator can delete group order ${code}`);
+  }
+  await prisma.groupOrder.delete({ where: { id: go.id } });
+  return { code, deleted: true, deletedAt: new Date() };
 }
 
 export async function addGroupOrderItem(code: string, customerId: string, input: AddGroupOrderItemInput): Promise<GroupOrderFull> {
@@ -379,7 +508,19 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
   if (!go) throw new Error(`Group order ${code} not found`);
   checkExpiry(go);
   if (go.status === 'EXPIRED') throw new Error(`Group order ${code} has expired`);
+  if (go.status === 'CHECKOUT_STARTED' || go.status === 'CONFIRMED') {
+    throw new Error(`Group order ${code} is already in checkout/confirmed`);
+  }
   const qty = input.quantity ?? 1;
+  const itemMeta = ((input.metadata as GroupOrderItemRuleMetadata | null) ?? {});
+  const manufacturerId = itemMeta.manufacturerId?.trim();
+  if (!manufacturerId) {
+    throw new Error('Product is missing manufacturer metadata. Cannot add to a group order.');
+  }
+
+  if (go.manufacturerId && go.manufacturerId !== manufacturerId) {
+    throw new Error(`Group order ${code} is locked to manufacturer "${go.manufacturerId}".`);
+  }
 
   const existing = await prisma.groupOrderItem.findFirst({
     where: { groupOrderId: go.id, customerId, productId: input.productId, variantId: input.variantId ?? null }
@@ -393,6 +534,18 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
         variantId: input.variantId ?? null, name: input.name,
         imageUrl: input.imageUrl ?? null, unitPrice: new Decimal(input.unitPrice),
         quantity: qty, metadata: (input.metadata ?? null) as any
+      }
+    });
+  }
+  if (!go.manufacturerId) {
+    await prisma.groupOrder.update({
+      where: { id: go.id },
+      data: {
+        manufacturerId,
+        constraintsJson: {
+          manufacturerId,
+          manufacturerName: itemMeta.manufacturerName ?? null
+        } as any
       }
     });
   }
@@ -418,11 +571,121 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
   });
   if (!go) throw new Error(`Group order ${code} not found`);
   checkExpiry(go);
+  const progress = ((go.meta as GroupOrderFull['progress'] | null) ?? {
+    balancedLayers: 0,
+    totalBoxes: go.items.reduce((sum, i) => sum + i.quantity, 0),
+    remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
+    productLayers: []
+  });
   return {
     id: go.id, code: go.code, status: go.status, moqTarget: go.moqTarget, moqCurrent: go.moqCurrent,
+    manufacturerId: go.manufacturerId,
     expiresAt: go.expiresAt, createdByCustomerId: go.createdByCustomerId,
     participants: go.participants,
     items: go.items.map((i) => ({ ...i, unitPrice: Number(i.unitPrice).toFixed(2) })),
-    participantCount: go.participants.length
+    participantCount: go.participants.length,
+    progress
   };
+}
+
+export async function listDiscoverableGroupOrders(params?: {
+  manufacturerId?: string;
+  limit?: number;
+}): Promise<DiscoverableGroupOrder[]> {
+  // Keep discoverability clean by applying expiry/deletion policy before listing.
+  await cleanupExpiredGroupOrders();
+
+  const now = new Date();
+  const limit = Math.max(1, Math.min(50, params?.limit ?? 10));
+  const manufacturerId = params?.manufacturerId?.trim();
+
+  const orders = await prisma.groupOrder.findMany({
+    where: {
+      status: { in: ['OPEN', 'MOQ_REACHED'] },
+      ...(manufacturerId ? { manufacturerId } : {}),
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+    },
+    orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+    take: limit,
+    include: {
+      participants: { select: { customerId: true } }
+    }
+  });
+
+  return orders.map((go) => ({
+    code: go.code,
+    status: go.status,
+    manufacturerId: go.manufacturerId,
+    moqTarget: go.moqTarget,
+    moqCurrent: go.moqCurrent,
+    remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
+    participantCount: go.participants.length,
+    expiresAt: go.expiresAt
+  }));
+}
+
+export async function findBestGroupOrdersForManufacturer(params: {
+  manufacturerId: string;
+  limit?: number;
+}): Promise<DiscoverableGroupOrder[]> {
+  const manufacturerId = params.manufacturerId.trim();
+  if (!manufacturerId) return [];
+
+  const candidates = await listDiscoverableGroupOrders({
+    manufacturerId,
+    limit: Math.max(1, Math.min(50, params.limit ?? 20))
+  });
+
+  // Best first:
+  // 1) MOQ already reached
+  // 2) Lowest remaining to MOQ
+  // 3) Higher participation
+  return candidates
+    .sort((a, b) => {
+      const aReached = a.moqCurrent >= a.moqTarget ? 1 : 0;
+      const bReached = b.moqCurrent >= b.moqTarget ? 1 : 0;
+      if (aReached !== bReached) return bReached - aReached;
+      if (a.remainingToTarget !== b.remainingToTarget) return a.remainingToTarget - b.remainingToTarget;
+      return b.participantCount - a.participantCount;
+    })
+    .slice(0, Math.max(1, Math.min(10, params.limit ?? 3)));
+}
+
+export async function cleanupExpiredGroupOrders(params?: {
+  deleteAfterHours?: number;
+}): Promise<{ markedExpired: number; deleted: number }> {
+  const now = new Date();
+  const deleteAfterHours = params?.deleteAfterHours ?? 24;
+  const hardDeleteBefore = new Date(now.getTime() - deleteAfterHours * 60 * 60 * 1000);
+
+  // Step 1: auto-close orders that passed deadline.
+  const mark = await prisma.groupOrder.updateMany({
+    where: {
+      status: { in: ['OPEN', 'DRAFT', 'MOQ_REACHED'] },
+      expiresAt: { not: null, lt: now }
+    },
+    data: { status: 'EXPIRED' }
+  });
+
+  // Step 2: hard-delete expired orders that are old enough OR orphaned.
+  const expired = await prisma.groupOrder.findMany({
+    where: { status: 'EXPIRED' },
+    include: {
+      participants: { select: { customerId: true } }
+    }
+  });
+
+  const deletableIds = expired
+    .filter((go) => go.participants.length === 0 || (go.expiresAt !== null && go.expiresAt <= hardDeleteBefore))
+    .map((go) => go.id);
+
+  let deleted = 0;
+  if (deletableIds.length > 0) {
+    const result = await prisma.groupOrder.deleteMany({
+      where: { id: { in: deletableIds } }
+    });
+    deleted = result.count;
+  }
+
+  return { markedExpired: mark.count, deleted };
 }
