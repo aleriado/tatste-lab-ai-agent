@@ -162,8 +162,10 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
             status: data.status,
             moqCurrent: data.moqCurrent,
             moqTarget: data.moqTarget,
+            manufacturerId: data.manufacturerId ?? undefined,
             participantCount: data.participantCount,
-            expiresAt: data.expiresAt ?? undefined
+            expiresAt: data.expiresAt ?? undefined,
+            progress: data.progress ?? undefined
           };
         }
 

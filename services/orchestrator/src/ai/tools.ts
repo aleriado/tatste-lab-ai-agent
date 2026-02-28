@@ -133,7 +133,7 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'group_create',
-      description: 'Create a new group order. Returns a shareable code for others to join.',
+      description: 'Create a new group order. Returns a shareable code for others to join. Group orders support one manufacturer only and MOQ progress is tracked live.',
       parameters: {
         type: 'object',
         properties: {
@@ -175,6 +175,20 @@ export const conciergeTools: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'group_delete',
+      description: 'Delete a group order by code. Only the original creator can delete it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The group order code to delete' }
+        },
+        required: ['code']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'group_status',
       description: 'Check the status of a group order (participants, MOQ progress, deadline).',
       parameters: {
@@ -189,8 +203,37 @@ export const conciergeTools: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'group_discover',
+      description: 'List active shared group orders that users can join. Use when user asks "any open group order?" or wants to browse public group orders.',
+      parameters: {
+        type: 'object',
+        properties: {
+          manufacturerId: { type: 'string', description: 'Optional manufacturer ID to filter compatible orders.' },
+          limit: { type: 'number', description: 'Max group orders to return (default 10).' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'group_best_match',
+      description: 'Find the best existing shared group orders for a product, prioritizing orders closest to MOQ (or already reached). Use to explain which order is best and why.',
+      parameters: {
+        type: 'object',
+        properties: {
+          productId: { type: 'string', description: 'Product ID to find best matching group orders for.' },
+          limit: { type: 'number', description: 'Max recommended orders to return (default 3).' }
+        },
+        required: ['productId']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'group_add_item',
-      description: 'Add a product to a group order.',
+      description: 'Add a product to a group order. All products in a single group order must be from the same manufacturer. MOQ progress follows layer rules per product.',
       parameters: {
         type: 'object',
         properties: {

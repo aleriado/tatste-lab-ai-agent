@@ -57,8 +57,21 @@ export interface GroupOrderSnapshot {
   status: string;
   moqCurrent: number;
   moqTarget: number;
+  manufacturerId?: string | null;
   participantCount: number;
   expiresAt?: string;
+  progress?: {
+    balancedLayers: number;
+    totalBoxes: number;
+    remainingToTarget: number;
+    productLayers: {
+      productId: string;
+      quantity: number;
+      boxesPerLayer: number;
+      completedLayers: number;
+      openedLayers: number;
+    }[];
+  };
 }
 
 export interface CheckoutLink {

@@ -12,7 +12,10 @@ import {
   leaveGroupOrder,
   addGroupOrderItem,
   removeGroupOrderItem,
-  getGroupOrderStatus
+  getGroupOrderStatus,
+  listDiscoverableGroupOrders,
+  findBestGroupOrdersForManufacturer,
+  deleteGroupOrderByCreator
 } from '@taste-labs/db';
 import { getPaymentAdapter } from '../adapters/payment';
 import { logInfo, logError } from '../logger';
@@ -26,6 +29,14 @@ export interface ToolResult {
   data: unknown;
   // Products returned by search/detail for the frontend to render as cards
   products?: WooProduct[];
+}
+
+function productGroupOrderMetadata(product: WooProduct) {
+  return {
+    manufacturerId: product.manufacturerId ?? product.metadata?.manufacturerId,
+    manufacturerName: product.manufacturerName ?? product.metadata?.manufacturerName,
+    boxesPerLayer: product.boxesPerLayer ?? (product.metadata?.boxesPerLayer as number | undefined)
+  };
 }
 
 export async function executeTool(
@@ -186,9 +197,51 @@ export async function executeTool(
       return { data: go };
     }
 
+    case 'group_delete': {
+      const result = await deleteGroupOrderByCreator(args.code as string, ctx.customerId);
+      return { data: result };
+    }
+
     case 'group_status': {
       const go = await getGroupOrderStatus(args.code as string);
       return { data: go };
+    }
+
+    case 'group_discover': {
+      const orders = await listDiscoverableGroupOrders({
+        manufacturerId: (args.manufacturerId as string | undefined) ?? undefined,
+        limit: (args.limit as number | undefined) ?? 10
+      });
+      return { data: { orders } };
+    }
+
+    case 'group_best_match': {
+      const productId = args.productId as string;
+      const product = await woo.getProduct(productId);
+      if (!product) return { data: { error: `Product ${productId} not found` } };
+
+      const groupMeta = productGroupOrderMetadata(product);
+      if (!groupMeta.manufacturerId) {
+        return {
+          data: {
+            error: `Product "${product.name}" is missing manufacturer mapping, so I can't find compatible group orders.`
+          }
+        };
+      }
+
+      const matches = await findBestGroupOrdersForManufacturer({
+        manufacturerId: String(groupMeta.manufacturerId),
+        limit: (args.limit as number | undefined) ?? 3
+      });
+
+      return {
+        data: {
+          productId: product.id,
+          productName: product.name,
+          manufacturerId: String(groupMeta.manufacturerId),
+          orders: matches
+        }
+      };
     }
 
     case 'group_add_item': {
@@ -204,6 +257,25 @@ export async function executeTool(
       if (!product.price || product.price.trim() === '' || isNaN(groupUnitPrice) || groupUnitPrice <= 0) {
         return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added.` } };
       }
+      if (product.inStock === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
+      }
+
+      const groupMeta = productGroupOrderMetadata(product);
+      if (!groupMeta.manufacturerId) {
+        return {
+          data: {
+            error: `Product "${product.name}" is missing manufacturer mapping. Group orders require products from one manufacturer.`
+          }
+        };
+      }
+      if (!groupMeta.boxesPerLayer || groupMeta.boxesPerLayer <= 0) {
+        return {
+          data: {
+            error: `Product "${product.name}" is missing valid boxes-per-layer metadata required for MOQ tracking.`
+          }
+        };
+      }
 
       const go = await addGroupOrderItem(args.code as string, ctx.customerId, {
         productId,
@@ -211,7 +283,8 @@ export async function executeTool(
         name: product.name,
         imageUrl: product.images?.[0]?.src ?? null,
         unitPrice: groupUnitPrice,
-        quantity: (args.quantity as number) ?? 1
+        quantity: (args.quantity as number) ?? 1,
+        metadata: groupMeta
       });
       return { data: go };
     }
