@@ -25,7 +25,39 @@ function stripHtml(html: string | undefined | null): string {
   return html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#039;/g, "'").trim();
 }
 
+function readMeta(raw: any, keys: string[]): unknown {
+  const keySet = new Set(keys.map((k) => k.toLowerCase()));
+  const meta = Array.isArray(raw?.meta_data) ? raw.meta_data : [];
+  for (const entry of meta) {
+    const key = String(entry?.key ?? '').toLowerCase();
+    if (keySet.has(key)) return entry?.value;
+  }
+  for (const key of keys) {
+    if (raw?.[key] !== undefined && raw?.[key] !== null && raw?.[key] !== '') return raw[key];
+  }
+  return undefined;
+}
+
+function toPositiveInt(value: unknown): number | undefined {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return undefined;
+  return Math.floor(num);
+}
+
 function normalizeProduct(raw: any): WooProduct {
+  const manufacturerIdRaw =
+    readMeta(raw, ['manufacturer_id', 'manufacturerId', 'supplier_id', 'vendor_id', 'brand_id']) ??
+    raw?.brands?.[0]?.id;
+  const manufacturerNameRaw =
+    readMeta(raw, ['manufacturer_name', 'manufacturer', 'supplier', 'vendor', 'brand']) ??
+    raw?.brands?.[0]?.name;
+  const boxesPerLayerRaw = readMeta(raw, [
+    'boxes_per_layer',
+    'box_per_layer',
+    'cartons_per_layer',
+    'units_per_layer'
+  ]);
+
   return {
     id: String(raw?.id ?? ''),
     name: String(raw?.name ?? ''),
@@ -44,7 +76,15 @@ function normalizeProduct(raw: any): WooProduct {
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
     upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
-    purchasable: raw?.purchasable ?? true
+    purchasable: raw?.purchasable ?? true,
+    manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
+    manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+    boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
+    metadata: {
+      manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
+      manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+      boxesPerLayer: toPositiveInt(boxesPerLayerRaw)
+    }
   };
 }
 

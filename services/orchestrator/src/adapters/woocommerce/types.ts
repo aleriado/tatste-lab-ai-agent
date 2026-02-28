@@ -22,6 +22,10 @@ export interface WooProduct {
   crossSellIds?: number[];
   upsellIds?: number[];
   purchasable?: boolean;
+  manufacturerId?: string;
+  manufacturerName?: string;
+  boxesPerLayer?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface WooVariation {
