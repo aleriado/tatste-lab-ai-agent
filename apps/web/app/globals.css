@@ -763,3 +763,185 @@ body {
   cursor: pointer;
 }
 .modal-add-btn:hover { opacity: 0.9; }
+
+/* ── Group Order MOQ Card ── */
+.group-order-moq-card {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  background: rgba(15, 23, 42, 0.55);
+  text-align: center;
+}
+
+.group-order-moq-title {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 0.3rem;
+}
+
+.group-order-moq-value {
+  font-size: 0.82rem;
+  color: #cbd5e1;
+  margin-bottom: 0.25rem;
+}
+
+.group-order-moq-hint {
+  font-size: 0.68rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.group-order-moq-info {
+  font-size: 0.72rem;
+  color: #cbd5e1;
+  margin-bottom: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(56, 189, 248, 0.08);
+  border-radius: 0.35rem;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+/* ── Group Order Surfaces Card ── */
+.group-order-surfaces-card {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.group-order-surfaces-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 0.15rem;
+}
+
+.group-order-surfaces-subtitle {
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: #94a3b8;
+  margin-left: 0.3rem;
+}
+
+/* ── Individual Surface ── */
+.group-order-surface {
+  margin-top: 0.5rem;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 0.45rem;
+  padding: 0.5rem;
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.group-order-surface-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.group-order-surface-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #c4b5fd;
+}
+
+.group-order-surface-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+}
+
+.group-order-surface-status.open {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+}
+
+.group-order-surface-status.full {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+/* ── Layers Container ── */
+.group-order-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.group-order-layer-empty {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-style: italic;
+  padding: 0.3rem;
+  text-align: center;
+}
+
+/* ── Individual Layer ── */
+.group-order-layer {
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 0.35rem;
+  padding: 0.4rem;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.group-order-layer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.group-order-layer-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.group-order-layer-status {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.08rem 0.3rem;
+  border-radius: 0.2rem;
+}
+
+.group-order-layer-status.open {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fcd34d;
+}
+
+.group-order-layer-status.full {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.group-order-layer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.group-order-layer-product {
+  font-size: 0.72rem;
+  color: #e2e8f0;
+}
+
+.group-order-layer-product-name {
+  font-size: 0.72rem;
+  color: #e2e8f0;
+  font-weight: 500;
+  margin-bottom: 0.15rem;
+}
+
+.group-order-layer-stats {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}

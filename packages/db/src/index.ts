@@ -299,6 +299,8 @@ export interface GroupOrderFull {
   status: GroupOrderStatus;
   moqTarget: number;
   moqCurrent: number;
+  moqSurfaces: number;
+  surfaceMaxLayers: number | null;
   /** Manufacturer name (stored in DB as manufacturerId column) */
   manufacturer: string | null;
   expiresAt: Date | null;
@@ -318,6 +320,22 @@ export interface GroupOrderFull {
       openedLayers: number;
     }[];
   };
+  surfaces?: {
+    surfaceIndex: number;
+    maxLayers: number;
+    status: string;
+    layers: {
+      layerIndex: number;
+      productId: string;
+      productName: string;
+      variantId: string | null;
+      capacityBoxes: number;
+      capacityUnits: number;
+      filledBoxes: number;
+      filledUnits: number;
+      status: string;
+    }[];
+  }[];
 }
 
 export interface AddGroupOrderItemInput {
@@ -345,6 +363,10 @@ export interface DiscoverableGroupOrder {
   remainingToTarget: number;
   participantCount: number;
   expiresAt: Date | null;
+  /** Number of surfaces opened (may be partial/incomplete) */
+  surfacesOpened: number;
+  /** Total boxes filled across all surfaces */
+  totalBoxesFilled: number;
 }
 
 export interface DeleteGroupOrderResult {
@@ -360,7 +382,7 @@ function generateGroupCode(): string {
   return code;
 }
 
-async function recalcMoq(groupOrderId: string): Promise<number> {
+export async function recalcMoq(groupOrderId: string): Promise<number> {
   const go = await prisma.groupOrder.findUnique({
     where: { id: groupOrderId },
     include: {
@@ -371,11 +393,85 @@ async function recalcMoq(groupOrderId: string): Promise<number> {
           quantity: true,
           metadata: true
         }
+      },
+      surfaces: {
+        include: {
+          layers: true
+        }
       }
     }
   });
   if (!go) return 0;
 
+  // NEW: If surfaces/layers exist, calculate from new algorithm data
+  if (go.surfaces && go.surfaces.length > 0) {
+    const totalBoxes = go.surfaces.reduce((sum, surface) => {
+      return sum + surface.layers.reduce((layerSum, layer) => layerSum + layer.filledBoxes, 0);
+    }, 0);
+
+    // For new algorithm, moqCurrent represents number of SURFACES filled (not boxes)
+    // A surface is considered "filled" when it has at least one layer with boxes
+    const filledSurfaces = go.surfaces.filter(surface => 
+      surface.layers.some(layer => layer.filledBoxes > 0)
+    ).length;
+    
+    const moqCurrent = filledSurfaces;
+
+    console.log(`[recalcMoq] Calculating from surfaces/layers: groupOrderId=${groupOrderId}, totalBoxes=${totalBoxes}, surfaces=${go.surfaces.length}, filledSurfaces=${filledSurfaces}, moqCurrent=${moqCurrent}, moqTarget=${go.moqTarget}`);
+
+    // Calculate progress metadata from surfaces/layers
+    const productMap = new Map<string, { boxes: number; capacity: number }>();
+    for (const surface of go.surfaces) {
+      for (const layer of surface.layers) {
+        const key = `${layer.productId}:${layer.variantId ?? ''}`;
+        const existing = productMap.get(key);
+        if (existing) {
+          existing.boxes += layer.filledBoxes;
+          existing.capacity += layer.capacityBoxes;
+        } else {
+          productMap.set(key, { boxes: layer.filledBoxes, capacity: layer.capacityBoxes });
+        }
+      }
+    }
+
+    const productLayers = Array.from(productMap.entries()).map(([key, data]) => {
+      const [productId] = key.split(':');
+      const boxesPerLayer = data.capacity / go.surfaces.reduce((count, s) => 
+        count + s.layers.filter(l => `${l.productId}:${l.variantId ?? ''}` === key).length, 0
+      ) || 1;
+      return {
+        productId,
+        quantity: data.boxes,
+        boxesPerLayer: Math.floor(boxesPerLayer),
+        completedLayers: Math.floor(data.boxes / boxesPerLayer),
+        openedLayers: Math.ceil(data.boxes / boxesPerLayer)
+      };
+    });
+
+    const balancedLayers = productLayers.length === 0 ? 0 : Math.min(...productLayers.map(p => p.completedLayers));
+    const progressMeta = {
+      balancedLayers,
+      totalBoxes: moqCurrent,
+      remainingToTarget: Math.max(0, go.moqTarget - moqCurrent),
+      productLayers
+    };
+
+    let newStatus: GroupOrderStatus = go.status;
+    if (go.status === 'OPEN' && moqCurrent >= go.moqTarget) newStatus = 'MOQ_REACHED';
+    else if (go.status === 'MOQ_REACHED' && moqCurrent < go.moqTarget) newStatus = 'OPEN';
+
+    console.log(`[recalcMoq] Updating database: groupOrderId=${groupOrderId}, moqCurrent=${moqCurrent}, status=${newStatus}, progressMeta=`, progressMeta);
+
+    await prisma.groupOrder.update({
+      where: { id: groupOrderId },
+      data: { moqCurrent, status: newStatus, meta: progressMeta as any }
+    });
+
+    console.log(`[recalcMoq] Database updated successfully: groupOrderId=${groupOrderId}, moqCurrent=${moqCurrent}`);
+    return moqCurrent;
+  }
+
+  // OLD: Fallback to legacy items-based calculation
   const grouped = new Map<string, { productId: string; quantity: number; boxesPerLayer: number }>();
   for (const item of go.items) {
     const key = `${item.productId}:${item.variantId ?? ''}`;
@@ -455,7 +551,7 @@ export async function createGroupOrder(customerId: string, deadlineHours?: numbe
       createdByCustomerId: customerId, 
       status: 'OPEN', 
       moqSurfaces: config.defaultMoqSurfaces,
-      moqTarget: 1, // DEPRECATED: kept for backward compatibility
+      moqTarget: config.defaultMoqSurfaces, // Set to match moqSurfaces for backward compatibility
       moqCurrent: 0, // DEPRECATED: kept for backward compatibility
       expiresAt 
     }
@@ -580,25 +676,81 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
     where: { code },
     include: {
       participants: { select: { customerId: true, createdAt: true } },
-      items: { select: { id: true, customerId: true, productId: true, variantId: true, name: true, imageUrl: true, unitPrice: true, quantity: true } }
+      items: { select: { id: true, customerId: true, productId: true, variantId: true, name: true, imageUrl: true, unitPrice: true, quantity: true } },
+      surfaces: {
+        include: {
+          layers: {
+            orderBy: { layerIndex: 'asc' }
+          }
+        },
+        orderBy: { surfaceIndex: 'asc' }
+      }
     }
   });
   if (!go) throw new Error(`Group order ${code} not found`);
   checkExpiry(go);
+  
+  // Build enhanced progress with surface/layer details
   const progress = ((go.meta as GroupOrderFull['progress'] | null) ?? {
     balancedLayers: 0,
     totalBoxes: go.items.reduce((sum, i) => sum + i.quantity, 0),
     remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
     productLayers: []
   });
+
+  // Calculate live moqCurrent from surfaces/layers (new algorithm)
+  // moqCurrent = number of FULLY COMPLETED surfaces (status === 'full')
+  const liveMoqCurrent = go.surfaces.length > 0
+    ? go.surfaces.filter(s => s.status === 'full').length
+    : go.moqCurrent;
+  const moqTarget = go.moqSurfaces ?? go.moqTarget;
+
+  // Create a map of productId -> product name from items
+  const productNames = new Map<string, string>();
+  for (const item of go.items) {
+    const key = `${item.productId}:${item.variantId ?? ''}`;
+    if (!productNames.has(key)) {
+      productNames.set(key, item.name);
+    }
+  }
+
+  // Add surface and layer information with product names
+  const surfaceDetails = go.surfaces.map(surface => ({
+    surfaceIndex: surface.surfaceIndex,
+    maxLayers: surface.maxLayers,
+    status: surface.status,
+    layers: surface.layers.map(layer => {
+      const key = `${layer.productId}:${layer.variantId ?? ''}`;
+      return {
+        layerIndex: layer.layerIndex,
+        productId: layer.productId,
+        productName: productNames.get(key) ?? layer.productId,
+        variantId: layer.variantId,
+        capacityBoxes: layer.capacityBoxes,
+        capacityUnits: layer.capacityUnits,
+        filledBoxes: layer.filledBoxes,
+        filledUnits: layer.filledUnits,
+        status: layer.status
+      };
+    })
+  }));
+
   return {
-    id: go.id, code: go.code, status: go.status, moqTarget: go.moqTarget, moqCurrent: go.moqCurrent,
+    id: go.id, 
+    code: go.code, 
+    status: go.status, 
+    moqTarget,
+    moqCurrent: liveMoqCurrent,
+    moqSurfaces: go.moqSurfaces,
+    surfaceMaxLayers: go.surfaceMaxLayers,
     manufacturer: go.manufacturerId,
-    expiresAt: go.expiresAt, createdByCustomerId: go.createdByCustomerId,
+    expiresAt: go.expiresAt, 
+    createdByCustomerId: go.createdByCustomerId,
     participants: go.participants,
     items: go.items.map((i) => ({ ...i, unitPrice: Number(i.unitPrice).toFixed(2) })),
     participantCount: go.participants.length,
-    progress
+    progress,
+    surfaces: surfaceDetails
   };
 }
 
@@ -622,20 +774,42 @@ export async function listDiscoverableGroupOrders(params?: {
     orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
     take: limit,
     include: {
-      participants: { select: { customerId: true } }
+      participants: { select: { customerId: true } },
+      surfaces: {
+        include: { layers: { select: { filledBoxes: true } } }
+      }
     }
   });
 
-  return orders.map((go) => ({
-    code: go.code,
-    status: go.status,
-    manufacturer: go.manufacturerId,
-    moqTarget: go.moqTarget,
-    moqCurrent: go.moqCurrent,
-    remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
-    participantCount: go.participants.length,
-    expiresAt: go.expiresAt
-  }));
+  return orders.map((go) => {
+    // Calculate moqCurrent live from surfaces/layers if available (new algorithm)
+    // moqCurrent = number of FULLY COMPLETED surfaces (all layers full)
+    // A surface is complete when its status is 'full'
+    const liveMoqCurrent = go.surfaces.length > 0
+      ? go.surfaces.filter(s => s.status === 'full').length
+      : go.moqCurrent;
+
+    // moqTarget should match moqSurfaces (the real target in surfaces/pallets)
+    const moqTarget = go.moqSurfaces ?? go.moqTarget;
+
+    // Total boxes filled across all surfaces (for AI progress context)
+    const totalBoxesFilled = go.surfaces.reduce((sum, s) =>
+      sum + s.layers.reduce((ls, l) => ls + l.filledBoxes, 0), 0
+    );
+
+    return {
+      code: go.code,
+      status: go.status,
+      manufacturer: go.manufacturerId,
+      moqTarget,
+      moqCurrent: liveMoqCurrent,
+      remainingToTarget: Math.max(0, moqTarget - liveMoqCurrent),
+      participantCount: go.participants.length,
+      expiresAt: go.expiresAt,
+      surfacesOpened: go.surfaces.length,
+      totalBoxesFilled
+    };
+  });
 }
 
 export async function findBestGroupOrdersForManufacturer(params: {

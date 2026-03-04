@@ -56,7 +56,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
       : [])
   ];
 
-  const displayValue = (value?: string | number): string => {
+  const displayValue = (value?: string | number | boolean): string => {
     if (value === undefined || value === null) return t.notAvailable;
     const text = String(value).trim();
     return text.length > 0 ? text : t.notAvailable;

@@ -109,19 +109,38 @@ export function allocateToGroupOrder(
 /**
  * CLIENT RULE 1: Validate manufacturer match
  */
+/**
+ * Normalize a manufacturer name for fuzzy comparison.
+ * Strips punctuation (apostrophes, dots, dashes), collapses whitespace, lowercases.
+ * e.g. "קאמפו ד'אורו אס אר אל" and "קאמפו דאורו אס.אר.אל." both become "קאמפו דאורו אס אר אל"
+ */
+function normalizeManufacturer(name: string): string {
+  return name
+    .replace(/['\u2019\u0060\u00B4]/g, '')  // strip apostrophes
+    .replace(/\./g, ' ')                     // dots become spaces (handles אס.אר.אל. → אס אר אל)
+    .replace(/[,"\-_]/g, '')                 // strip other punctuation
+    .replace(/\s+/g, ' ')                    // collapse whitespace
+    .trim()
+    .toLowerCase();
+}
+
 function validateManufacturer(
   productManufacturer: string,
   state: GroupOrderState
 ): AllocationError | null {
-  if (state.manufacturerId && state.manufacturerId !== productManufacturer) {
-    return {
-      code: 'MANUFACTURER_MISMATCH',
-      message: `Group order is locked to manufacturer "${state.manufacturerId}"`,
-      details: {
-        groupOrderManufacturer: state.manufacturerId,
-        productManufacturer
-      }
-    };
+  if (state.manufacturerId) {
+    const normalizedGroup = normalizeManufacturer(state.manufacturerId);
+    const normalizedProduct = normalizeManufacturer(productManufacturer);
+    if (normalizedGroup !== normalizedProduct) {
+      return {
+        code: 'MANUFACTURER_MISMATCH',
+        message: `Group order is locked to manufacturer "${state.manufacturerId}"`,
+        details: {
+          groupOrderManufacturer: state.manufacturerId,
+          productManufacturer
+        }
+      };
+    }
   }
   return null;
 }

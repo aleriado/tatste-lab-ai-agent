@@ -93,6 +93,8 @@ export interface GroupOrderSnapshot {
   status: string;
   moqCurrent: number;
   moqTarget: number;
+  moqSurfaces: number;
+  surfaceMaxLayers?: number | null;
   /** Manufacturer name used as the group order constraint */
   manufacturer?: string | null;
   participantCount: number;
@@ -109,6 +111,22 @@ export interface GroupOrderSnapshot {
       openedLayers: number;
     }[];
   };
+  surfaces?: {
+    surfaceIndex: number;
+    maxLayers: number;
+    status: string;
+    layers: {
+      layerIndex: number;
+      productId: string;
+      productName?: string;
+      variantId: string | null;
+      capacityBoxes: number;
+      capacityUnits: number;
+      filledBoxes: number;
+      filledUnits: number;
+      status: string;
+    }[];
+  }[];
 }
 
 export interface CheckoutLink {

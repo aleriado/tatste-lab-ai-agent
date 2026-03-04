@@ -38,39 +38,32 @@ export interface ToolResult {
  * 
  * Validates that all required fields are present for the strict allocation algorithm.
  */
-function extractProductLogistics(product: WooProduct): ProductLogistics | null {
+function extractProductLogistics(product: WooProduct): ProductLogistics | { missingFields: string[] } {
   const manufacturer = product.manufacturer ?? product.metadata?.manufacturer as string | undefined;
   const unitsPerBox = product.unitsPerBox ?? product.metadata?.unitsPerBox as number | undefined;
   const boxesPerLayer = product.boxesPerLayer ?? product.metadata?.boxesPerLayer as number | undefined;
   const layersPerSurface = product.layersPerSurface ?? product.metadata?.layersPerSurface as number | undefined;
   const boxesPerSurface = product.boxesPerSurface ?? product.metadata?.boxesPerSurface as number | undefined;
 
-  // Validate all required fields
-  if (!manufacturer || typeof manufacturer !== 'string' || manufacturer.trim() === '') {
-    return null;
-  }
+  const missingFields: string[] = [];
+  if (!manufacturer || typeof manufacturer !== 'string' || manufacturer.trim() === '') missingFields.push('manufacturer (יצרן)');
+  if (!unitsPerBox || typeof unitsPerBox !== 'number' || unitsPerBox <= 0) missingFields.push('unitsPerBox (יחידות בקרטון)');
+  if (!boxesPerLayer || typeof boxesPerLayer !== 'number' || boxesPerLayer <= 0) missingFields.push('boxesPerLayer (קרטונים בשכבה)');
+  if (!layersPerSurface || typeof layersPerSurface !== 'number' || layersPerSurface <= 0) missingFields.push('layersPerSurface (שכבות במשטח)');
 
-  if (!unitsPerBox || typeof unitsPerBox !== 'number' || unitsPerBox <= 0) {
-    return null;
-  }
-
-  if (!boxesPerLayer || typeof boxesPerLayer !== 'number' || boxesPerLayer <= 0) {
-    return null;
-  }
-
-  if (!layersPerSurface || typeof layersPerSurface !== 'number' || layersPerSurface <= 0) {
-    return null;
+  if (missingFields.length > 0) {
+    return { missingFields };
   }
 
   return {
     productId: product.id,
     variantId: null,
     name: product.name,
-    manufacturer: manufacturer.trim(),
-    unitsPerBox,
-    boxesPerLayer,
-    layersPerSurface,
-    boxesPerSurface: boxesPerSurface ?? (boxesPerLayer * layersPerSurface)
+    manufacturer: (manufacturer as string).trim(),
+    unitsPerBox: unitsPerBox as number,
+    boxesPerLayer: boxesPerLayer as number,
+    layersPerSurface: layersPerSurface as number,
+    boxesPerSurface: boxesPerSurface ?? ((boxesPerLayer as number) * (layersPerSurface as number))
   };
 }
 
@@ -322,11 +315,12 @@ export async function executeTool(
 
       // Extract product logistics for new allocation algorithm
       const logistics = extractProductLogistics(product);
-      if (!logistics) {
-        logInfo(`group_add_item: product missing logistics productId=${productId} name="${product.name}"`, { traceId: ctx.traceId });
+      if (!logistics || 'missingFields' in logistics) {
+        const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+        logInfo(`group_add_item: product missing logistics productId=${productId} name="${product.name}" missing=${missing.join(', ')}`, { traceId: ctx.traceId });
         return {
           data: {
-            error: `Product "${product.name}" is missing required logistics data (manufacturer, unitsPerBox, boxesPerLayer, layersPerSurface). Cannot add to group order.`
+            error: `Cannot add "${product.name}" to group order — missing required logistics fields: ${missing.join(', ')}. Please update the product data in HubSpot.`
           }
         };
       }

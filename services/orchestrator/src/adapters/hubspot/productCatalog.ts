@@ -445,12 +445,22 @@ export async function searchHubSpotProducts(query: string, limit: number): Promi
     }
 
     const mapped = results.map((r) => mapHubSpotToWooProduct(r, descriptionProps));
+
+    // Filter out WooCommerce stub products that were imported into HubSpot without logistics data.
+    // These are identifiable by having a store_product_id but no manufacturer or logistics fields.
+    const filtered = mapped.filter((p) => {
+      const hasManufacturer = !!p.manufacturer;
+      const hasLogistics = !!p.unitsPerBox || !!p.boxesPerLayer || !!p.layersPerSurface;
+      return hasManufacturer || hasLogistics;
+    });
+
     logInfo('HubSpot product search success', {
       query,
       requestedLimit: desired,
-      returned: mapped.length
+      returned: filtered.length,
+      filteredOut: mapped.length - filtered.length
     });
-    return mapped;
+    return filtered;
   } catch (err) {
     logError('HubSpot product search failed', err);
     return [];

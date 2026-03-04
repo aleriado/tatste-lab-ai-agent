@@ -96,6 +96,13 @@ export async function addItemToGroupOrder(
       product.unitsPerBox
     );
 
+    // Update moqCurrent for backward compatibility (used by group_discover)
+    // This is a temporary bridge until we fully migrate to surface-based MOQ
+    console.log(`[service] Calling recalcMoq for groupOrderId=${groupOrder.id}, code=${code}`);
+    const { recalcMoq } = await import('../index.js');
+    const updatedMoqCurrent = await recalcMoq(groupOrder.id);
+    console.log(`[service] recalcMoq completed: groupOrderId=${groupOrder.id}, updatedMoqCurrent=${updatedMoqCurrent}`);
+
     console.log(`[db] Group order allocation success`, {
       code,
       customerId,
