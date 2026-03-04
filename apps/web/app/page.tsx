@@ -22,6 +22,9 @@ export interface UiText {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
+  productSpec: string; productType: string; manufacturer: string; manufacturerId: string; barcode: string; weight: string;
+  stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
+  notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
   clearCart: string; emptyCart: string; completePayment: string;
   dueNow: string; dueLater: string;
@@ -46,6 +49,9 @@ const UI_TEXT: Record<Lang, {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
+  productSpec: string; productType: string; manufacturer: string; manufacturerId: string; barcode: string; weight: string;
+  stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
+  notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
   clearCart: string; emptyCart: string; completePayment: string;
   dueNow: string; dueLater: string;
@@ -68,6 +74,19 @@ const UI_TEXT: Record<Lang, {
     details: "Details",
     inStock: "In Stock",
     outOfStock: "Out of Stock",
+    productSpec: "Product Specs",
+    productType: "Product type",
+    manufacturer: "Manufacturer",
+    manufacturerId: "Manufacturer ID",
+    barcode: "Barcode",
+    weight: "Weight",
+    stockUnits: "Stock units",
+    unitsPerBox: "Units per box",
+    boxesPerLayer: "Boxes per layer",
+    layersPerSurface: "Layers per pallet",
+    boxesPerSurface: "Boxes per pallet",
+    moqBoxes: "MOQ (boxes)",
+    notAvailable: "N/A",
     shoppingCart: "Shopping Cart",
     items: "items",
     total: "Total",
@@ -98,6 +117,19 @@ const UI_TEXT: Record<Lang, {
     details: "פרטים",
     inStock: "במלאי",
     outOfStock: "אזל מהמלאי",
+    productSpec: "מפרט מוצר",
+    productType: "סוג מוצר",
+    manufacturer: "יצרן",
+    manufacturerId: "מזהה יצרן",
+    barcode: "ברקוד",
+    weight: "משקל",
+    stockUnits: "יחידות במלאי",
+    unitsPerBox: "יחידות בקרטון",
+    boxesPerLayer: "קרטונים בשכבה",
+    layersPerSurface: "שכבות במשטח",
+    boxesPerSurface: "קרטונים במשטח",
+    moqBoxes: "MOQ (קרטונים)",
+    notAvailable: "לא זמין",
     shoppingCart: "סל קניות",
     items: "פריטים",
     total: "סה״כ",
@@ -165,12 +197,12 @@ export default function ChatPage() {
     sendLockRef.current = true;
 
     // Track per-product loading
-    const productIdMatch = trimmed.match(/\[productId:(\d+)\]/);
+    const productIdMatch = trimmed.match(/\[productId:([^\]]+)\]/);
     if (productIdMatch) {
       setLoadingProductId(productIdMatch[1]);
     }
 
-    setMessages((prev) => [...prev, { from: "user", text: trimmed.replace(/\s*\[productId:\d+\]/g, '') }]);
+    setMessages((prev) => [...prev, { from: "user", text: trimmed.replace(/\s*\[productId:[^\]]+\]/g, '') }]);
     setInput("");
     setIsSending(true);
 

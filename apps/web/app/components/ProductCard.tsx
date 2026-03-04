@@ -36,6 +36,33 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
   }, [loading]);
 
   const addText = `Add ${product.name} to cart [productId:${product.id}]`;
+  const normalizedType = (product.productType ?? product.type ?? "").toLowerCase();
+  const isDigital = /download|digital|להורדה/.test(normalizedType);
+  const moqBoxes = product.boxesPerLayer ?? product.boxesPerSurface;
+
+  const specRows: Array<{ label: string; value?: string | number }> = [
+    { label: t.productType, value: product.productType ?? product.type },
+    { label: t.manufacturer, value: product.manufacturerName },
+    { label: t.manufacturerId, value: product.manufacturerId },
+    { label: t.barcode, value: product.barcode },
+    { label: t.weight, value: product.weight },
+    { label: t.stockUnits, value: product.stockQuantity },
+    ...(!isDigital
+      ? [
+          { label: t.unitsPerBox, value: product.unitsPerBox },
+          { label: t.boxesPerLayer, value: product.boxesPerLayer },
+          { label: t.layersPerSurface, value: product.layersPerSurface },
+          { label: t.boxesPerSurface, value: product.boxesPerSurface },
+          { label: t.moqBoxes, value: moqBoxes }
+        ]
+      : [])
+  ];
+
+  const displayValue = (value?: string | number): string => {
+    if (value === undefined || value === null) return t.notAvailable;
+    const text = String(value).trim();
+    return text.length > 0 ? text : t.notAvailable;
+  };
 
   const handleAdd = () => {
     if (loading || disabled || addGuardRef.current) return;
@@ -97,12 +124,22 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
                   {product.inStock ? t.inStock : t.outOfStock}
                 </div>
               )}
-              {product.description && (
-                <div className="modal-description">{product.description}</div>
+              {(product.detailedDescription ?? product.description ?? product.shortDescription) && (
+                <div className="modal-description">
+                  {product.detailedDescription ?? product.description ?? product.shortDescription}
+                </div>
               )}
-              {!product.description && product.shortDescription && (
-                <div className="modal-description">{product.shortDescription}</div>
-              )}
+              <div className="modal-specs">
+                <div className="modal-specs-title">{t.productSpec}</div>
+                <div className="modal-specs-grid">
+                  {specRows.map((row) => (
+                    <div key={row.label} className="modal-spec-row">
+                      <span className="modal-spec-label">{row.label}</span>
+                      <span className="modal-spec-value">{displayValue(row.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <button
                 className="modal-add-btn"
                 onClick={() => {

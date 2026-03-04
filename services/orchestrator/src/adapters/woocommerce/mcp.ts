@@ -40,6 +40,26 @@ function normalizeProduct(raw: any): WooProduct {
     'cartons_per_layer',
     'units_per_layer'
   ]);
+  const unitsPerBoxRaw = readMeta(raw, [
+    'units_per_box',
+    'units_in_box',
+    'units_per_carton',
+    'qty_per_box'
+  ]);
+  const layersPerSurfaceRaw = readMeta(raw, [
+    'layers_per_surface',
+    'number_of_layers_per_surface',
+    'layers_per_pallet',
+    'pallet_layers'
+  ]);
+  const boxesPerSurfaceRaw = readMeta(raw, [
+    'boxes_per_surface',
+    'boxes_per_pallet',
+    'cartons_per_surface',
+    'cartons_per_pallet'
+  ]);
+  const barcodeRaw = readMeta(raw, ['barcode', 'ean', 'ean13', 'upc', 'gtin']);
+  const productTypeRaw = readMeta(raw, ['product_type', 'type_label']);
 
   return {
     id: String(raw?.id ?? raw?.product_id ?? ''),
@@ -56,13 +76,27 @@ function normalizeProduct(raw: any): WooProduct {
       : [],
     type: raw?.type ?? 'simple',
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
+    stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
     upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
+    weight: raw?.weight != null ? String(raw.weight) : undefined,
+    barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+    productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+    unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+    layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+    boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
     manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
     manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
     boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
     metadata: {
+      stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
+      weight: raw?.weight != null ? String(raw.weight) : undefined,
+      barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+      productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+      unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+      layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+      boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
       manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
       manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
       boxesPerLayer: toPositiveInt(boxesPerLayerRaw)

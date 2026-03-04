@@ -51,10 +51,16 @@ export async function executeTool(
   switch (name) {
     // ── Product tools ──
     case 'product_search': {
-      const products = await woo.searchProducts(
-        (args.query as string) ?? '',
-        { limit: (args.limit as number) ?? 6 }
-      );
+      const query = (args.query as string) ?? '';
+      const requestedLimit = Number(args.limit);
+      let normalizedLimit =
+        Number.isFinite(requestedLimit) && requestedLimit > 0
+          ? Math.floor(requestedLimit)
+          : 200;
+      // For browse/recommendations (empty or short query), enforce minimum to avoid AI passing tiny limits (e.g. 5)
+      const isBrowse = !query.trim();
+      if (isBrowse && normalizedLimit < 50) normalizedLimit = 100;
+      const products = await woo.searchProducts(query, { limit: normalizedLimit });
       return { data: products, products };
     }
 

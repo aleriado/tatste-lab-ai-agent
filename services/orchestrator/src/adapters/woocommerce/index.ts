@@ -18,6 +18,13 @@ function getMode(): 'mcp' | 'rest' | 'mock' {
   return 'mock';
 }
 
+function getProductSource(): 'woo' | 'hubspot' {
+  const raw = (process.env.INTEGRATION_PRODUCT_SOURCE ?? process.env.PRODUCT_SOURCE ?? '').trim().toLowerCase();
+  if (raw === 'woo' || raw === 'woocommerce') return 'woo';
+  if (raw === 'hubspot') return 'hubspot';
+  return process.env.HUBSPOT_PRODUCTS_ACCESS_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN ? 'hubspot' : 'woo';
+}
+
 export function getWooAdapter(): WooCommerceAdapter {
   if (cached) return cached;
 
@@ -38,16 +45,21 @@ export function getWooAdapter(): WooCommerceAdapter {
   }
 
   if (mode === 'rest') {
-    if (process.env.WOO_BASE_URL && process.env.WOO_CONSUMER_KEY && process.env.WOO_CONSUMER_SECRET) {
+    const source = getProductSource();
+    const hasWooCreds = !!(process.env.WOO_BASE_URL && process.env.WOO_CONSUMER_KEY && process.env.WOO_CONSUMER_SECRET);
+    const hasHubSpotProductCreds = !!(process.env.HUBSPOT_PRODUCTS_ACCESS_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN);
+    const canInitForSource = source === 'hubspot' ? hasHubSpotProductCreds : hasWooCreds;
+
+    if (canInitForSource) {
       try {
         cached = createRestWooAdapter();
-        logInfo('WooCommerce adapter: REST');
+        logInfo(`Catalog adapter: REST (source=${source})`);
         return cached;
       } catch (e) {
         logInfo('WooCommerce REST init failed; falling back to mock', e);
       }
     } else {
-      logInfo('WooCommerce REST env missing; using mock');
+      logInfo(`Catalog REST env missing for configured source (${source}); using mock`);
     }
   }
 

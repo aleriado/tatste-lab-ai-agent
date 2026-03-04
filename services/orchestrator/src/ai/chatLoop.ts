@@ -34,9 +34,20 @@ function wooToCard(p: WooProduct): ProductCard {
     imageUrl: p.images?.[0]?.src,
     shortDescription: p.shortDescription ?? p.description?.slice(0, 120),
     description: p.description,
+    detailedDescription: p.detailedDescription ?? p.description ?? p.shortDescription,
     categories: p.categories?.map((c) => c.name),
     type: p.type as 'simple' | 'variable' | undefined,
-    inStock: p.inStock
+    inStock: p.inStock,
+    stockQuantity: p.stockQuantity,
+    manufacturerId: p.manufacturerId ?? (p.metadata?.manufacturerId as string | undefined),
+    manufacturerName: p.manufacturerName ?? (p.metadata?.manufacturerName as string | undefined),
+    weight: p.weight ?? (p.metadata?.weight as string | undefined),
+    barcode: p.barcode ?? (p.metadata?.barcode as string | undefined),
+    productType: p.productType ?? (p.metadata?.productType as string | undefined),
+    unitsPerBox: p.unitsPerBox ?? (p.metadata?.unitsPerBox as number | undefined),
+    boxesPerLayer: p.boxesPerLayer ?? (p.metadata?.boxesPerLayer as number | undefined),
+    layersPerSurface: p.layersPerSurface ?? (p.metadata?.layersPerSurface as number | undefined),
+    boxesPerSurface: p.boxesPerSurface ?? (p.metadata?.boxesPerSurface as number | undefined)
   };
 }
 

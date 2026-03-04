@@ -29,9 +29,20 @@ export interface ProductCard {
   imageUrl?: string;
   shortDescription?: string;
   description?: string;
+  detailedDescription?: string;
   categories?: string[];
   type?: 'simple' | 'variable';
   inStock?: boolean;
+  stockQuantity?: number;
+  manufacturerId?: string;
+  manufacturerName?: string;
+  weight?: string;
+  barcode?: string;
+  productType?: string;
+  unitsPerBox?: number;
+  boxesPerLayer?: number;
+  layersPerSurface?: number;
+  boxesPerSurface?: number;
 }
 
 export interface CartItemSnapshot {

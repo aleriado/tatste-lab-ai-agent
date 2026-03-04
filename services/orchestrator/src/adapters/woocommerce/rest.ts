@@ -4,12 +4,38 @@
  */
 
 import type { WooCommerceAdapter, WooProduct, WooVariation } from './types';
+import {
+  getHubSpotProduct,
+  searchHubSpotProducts
+} from '../hubspot/productCatalog';
 import { logError, logInfo } from '../../logger';
 
 function getWooBaseUrl(): string {
   const base = process.env.WOO_BASE_URL;
   if (!base) throw new Error('WOO_BASE_URL is not set for REST adapter');
   return base.replace(/\/$/, '');
+}
+
+function hasWooRestConfigured(): boolean {
+  return !!(process.env.WOO_BASE_URL && process.env.WOO_CONSUMER_KEY && process.env.WOO_CONSUMER_SECRET);
+}
+
+type ProductSource = 'woo' | 'hubspot';
+
+function getProductSource(): ProductSource {
+  const raw = (process.env.INTEGRATION_PRODUCT_SOURCE ?? process.env.PRODUCT_SOURCE ?? '').trim().toLowerCase();
+  if (raw === 'woo' || raw === 'woocommerce') return 'woo';
+  if (raw === 'hubspot') return 'hubspot';
+  return process.env.HUBSPOT_PRODUCTS_ACCESS_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN ? 'hubspot' : 'woo';
+}
+
+function overlapCount(a: string[] = [], b: string[] = []): number {
+  const setA = new Set(a.map((x) => x.toLowerCase()));
+  let count = 0;
+  for (const item of b) {
+    if (setA.has(item.toLowerCase())) count += 1;
+  }
+  return count;
 }
 
 function getAuthHeader(): string {
@@ -57,6 +83,26 @@ function normalizeProduct(raw: any): WooProduct {
     'cartons_per_layer',
     'units_per_layer'
   ]);
+  const unitsPerBoxRaw = readMeta(raw, [
+    'units_per_box',
+    'units_in_box',
+    'units_per_carton',
+    'qty_per_box'
+  ]);
+  const layersPerSurfaceRaw = readMeta(raw, [
+    'layers_per_surface',
+    'number_of_layers_per_surface',
+    'layers_per_pallet',
+    'pallet_layers'
+  ]);
+  const boxesPerSurfaceRaw = readMeta(raw, [
+    'boxes_per_surface',
+    'boxes_per_pallet',
+    'cartons_per_surface',
+    'cartons_per_pallet'
+  ]);
+  const barcodeRaw = readMeta(raw, ['barcode', 'ean', 'ean13', 'upc', 'gtin']);
+  const productTypeRaw = readMeta(raw, ['product_type', 'type_label']);
 
   return {
     id: String(raw?.id ?? ''),
@@ -65,6 +111,7 @@ function normalizeProduct(raw: any): WooProduct {
     permalink: raw?.permalink,
     description: stripHtml(raw?.description),
     shortDescription: stripHtml(raw?.short_description),
+    detailedDescription: stripHtml(raw?.description) ?? stripHtml(raw?.short_description),
     images: Array.isArray(raw?.images)
       ? raw.images.map((img: any) => ({ src: img.src, alt: img.alt }))
       : [],
@@ -73,14 +120,28 @@ function normalizeProduct(raw: any): WooProduct {
       : [],
     type: raw?.type ?? 'simple',
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
+    stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
     upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
     purchasable: raw?.purchasable ?? true,
+    weight: raw?.weight != null ? String(raw.weight) : undefined,
+    barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+    productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+    unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+    layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+    boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
     manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
     manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
     boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
     metadata: {
+      stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
+      weight: raw?.weight != null ? String(raw.weight) : undefined,
+      barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+      productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+      unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+      layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+      boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
       manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
       manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
       boxesPerLayer: toPositiveInt(boxesPerLayerRaw)
@@ -132,11 +193,28 @@ export function createRestWooAdapter(): WooCommerceAdapter {
 
   return {
     async searchProducts(query: string, filters?: { category?: string; limit?: number }): Promise<WooProduct[]> {
-      const cacheKey = `search:${query}:${filters?.category ?? ''}:${filters?.limit ?? 10}`;
+      const cacheKey = `search:${query}:${filters?.category ?? ''}:${filters?.limit ?? 200}`;
       return cached(cacheKey, async () => {
+        const source = getProductSource();
+        const limit = filters?.limit ?? 200;
+        if (source === 'hubspot') {
+          const hubspotProducts = await searchHubSpotProducts(query, limit);
+          const byCategory = filters?.category
+            ? hubspotProducts.filter((p) =>
+                (p.categories ?? []).some(
+                  (c) =>
+                    c.name.toLowerCase() === filters.category!.toLowerCase() ||
+                    String(c.id) === filters.category
+                )
+              )
+            : hubspotProducts;
+          return byCategory.slice(0, limit);
+        }
+
         try {
+          if (!hasWooRestConfigured()) return [];
           const params: Record<string, string> = {
-            per_page: String(filters?.limit ?? 10)
+            per_page: String(limit)
           };
           if (query) params.search = query;
           if (filters?.category) params.category = filters.category;
@@ -145,13 +223,19 @@ export function createRestWooAdapter(): WooCommerceAdapter {
           return (Array.isArray(data) ? data : []).map(normalizeProduct);
         } catch (err) {
           logError('Woo REST searchProducts failed', err);
-          throw err;
+          return [];
         }
       });
     },
 
     async getProduct(productId: string): Promise<WooProduct | null> {
       return cached(`product:${productId}`, async () => {
+        const source = getProductSource();
+        if (source === 'hubspot') {
+          return getHubSpotProduct(productId);
+        }
+        if (!hasWooRestConfigured()) return null;
+
         try {
           const data = await wooFetch<any>(`/products/${productId}`);
           return normalizeProduct(data);
@@ -165,7 +249,14 @@ export function createRestWooAdapter(): WooCommerceAdapter {
 
     async getProductVariations(productId: string): Promise<WooVariation[]> {
       try {
-        const data = await wooFetch<any[]>(`/products/${productId}/variations`, { per_page: '50' });
+        if (getProductSource() === 'hubspot') return [];
+        if (!hasWooRestConfigured()) return [];
+        const product = await this.getProduct(productId);
+        const wooProductId =
+          (product?.metadata?.wooProductId as string | undefined) ??
+          (product?.metadata?.source === 'hubspot' ? undefined : product?.id) ??
+          productId;
+        const data = await wooFetch<any[]>(`/products/${wooProductId}/variations`, { per_page: '50' });
         return (Array.isArray(data) ? data : []).map(normalizeVariation);
       } catch (err) {
         logError('Woo REST getProductVariations failed', err);
@@ -176,8 +267,58 @@ export function createRestWooAdapter(): WooCommerceAdapter {
     async getRelatedProducts(productId: string): Promise<WooProduct[]> {
       return cached(`related:${productId}`, async () => {
         try {
+          const source = getProductSource();
           const product = await this.getProduct(productId);
           if (!product) return [];
+
+          if (source === 'hubspot') {
+            const queries = [
+              product.categories?.[0]?.name ?? '',
+              product.manufacturerName ?? '',
+              ''
+            ].filter((q, idx, arr) => q.trim().length > 0 || idx === arr.length - 1);
+
+            const pool: WooProduct[] = [];
+            const seen = new Set<string>();
+            for (const q of queries) {
+              const batch = await searchHubSpotProducts(q, 24);
+              for (const p of batch) {
+                if (!p?.id) continue;
+                if (seen.has(p.id)) continue;
+                seen.add(p.id);
+                pool.push(p);
+              }
+            }
+
+            const currentHubSpotId = String(product.metadata?.hubspotProductId ?? '');
+            const currentCats = (product.categories ?? []).map((c) => c.name);
+            const ranked = pool
+              .filter((p) => {
+                if (p.id === product.id) return false;
+                const pHubspotId = String(p.metadata?.hubspotProductId ?? '');
+                if (currentHubSpotId && pHubspotId && pHubspotId === currentHubSpotId) return false;
+                return true;
+              })
+              .map((p) => {
+                const pCats = (p.categories ?? []).map((c) => c.name);
+                const sameManufacturer =
+                  !!product.manufacturerName &&
+                  !!p.manufacturerName &&
+                  product.manufacturerName.toLowerCase() === p.manufacturerName.toLowerCase();
+                const categoryOverlap = overlapCount(currentCats, pCats);
+                const score = (sameManufacturer ? 3 : 0) + categoryOverlap;
+                return { p, score };
+              })
+              .sort((a, b) => b.score - a.score)
+              .map((entry) => entry.p)
+              .slice(0, 4);
+
+            if (ranked.length > 0) return ranked;
+            return [];
+          }
+
+          if (!hasWooRestConfigured()) return [];
+          const wooProductId = (product.metadata?.wooProductId as string | undefined) ?? productId;
 
           const relatedIds = [
             ...(product.crossSellIds ?? []),
@@ -199,11 +340,11 @@ export function createRestWooAdapter(): WooCommerceAdapter {
             const data = await wooFetch<any[]>('/products', {
               category: String(catId),
               per_page: '5',
-              exclude: productId
+              exclude: wooProductId
             });
             const results = (Array.isArray(data) ? data : [])
               .map(normalizeProduct)
-              .filter((p) => p.id !== productId)
+              .filter((p) => p.id !== wooProductId)
               .slice(0, 4);
             if (results.length > 0) return results;
           }
@@ -211,11 +352,11 @@ export function createRestWooAdapter(): WooCommerceAdapter {
           // Fallback 2: return any other products from the catalog
           const data = await wooFetch<any[]>('/products', {
             per_page: '6',
-            exclude: productId
+            exclude: wooProductId
           });
           return (Array.isArray(data) ? data : [])
             .map(normalizeProduct)
-            .filter((p) => p.id !== productId)
+            .filter((p) => p.id !== wooProductId)
             .slice(0, 4);
         } catch (err) {
           logError('Woo REST getRelatedProducts failed', err);

@@ -10,7 +10,7 @@ export const conciergeTools: ChatCompletionTool[] = [
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Search query (e.g. "שמן", "pasta", "oil"). Use empty string "" to list all products.' },
-          limit: { type: 'number', description: 'Max results to return (default 6)' }
+          limit: { type: 'number', description: 'Max results to return. Use 100-200 for recommendations/browse. Default 200. Never use less than 50 for catalog browse.' }
         },
         required: ['query']
       }
