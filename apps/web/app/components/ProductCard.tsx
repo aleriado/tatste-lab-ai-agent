@@ -36,17 +36,15 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
   }, [loading]);
 
   const addText = `Add ${product.name} to cart [productId:${product.id}]`;
-  const normalizedType = (product.productType ?? product.type ?? "").toLowerCase();
-  const isDigital = /download|digital|להורדה/.test(normalizedType);
+  const normalizedType = (product.type ?? "").toLowerCase();
+  const isDigital = /download|digital|להורדה/.test(normalizedType) || product.isDownloadable;
   const moqBoxes = product.boxesPerLayer ?? product.boxesPerSurface;
 
-  const specRows: Array<{ label: string; value?: string | number }> = [
-    { label: t.productType, value: product.productType ?? product.type },
-    { label: t.manufacturer, value: product.manufacturerName },
-    { label: t.manufacturerId, value: product.manufacturerId },
+  const specRows: Array<{ label: string; value?: string | number | boolean }> = [
+    { label: t.manufacturer, value: product.manufacturer },
     { label: t.barcode, value: product.barcode },
     { label: t.weight, value: product.weight },
-    { label: t.stockUnits, value: product.stockQuantity },
+    { label: t.stockUnits, value: product.inventory },
     ...(!isDigital
       ? [
           { label: t.unitsPerBox, value: product.unitsPerBox },

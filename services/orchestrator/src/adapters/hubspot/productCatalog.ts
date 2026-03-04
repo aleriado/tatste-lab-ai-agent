@@ -216,9 +216,9 @@ function mapHubSpotToWooProduct(
   const sku = firstNonEmpty([p.hs_sku, p.sku]);
   const productId = firstNonEmpty([wooProductId, sku, raw.id]) as string;
 
-  const manufacturerId = firstNonEmpty([p.manufacturer_id, p.brand_id]);
-  const manufacturerName = firstNonEmpty([
+  const manufacturer = firstNonEmpty([
     p.manufacturer_name,
+    p.manufacturer,
     p.yzrn__spq_producer__supplier,
     p.brand,
     p.mwtg_brand
@@ -250,7 +250,22 @@ function mapHubSpotToWooProduct(
     boxesPerSurface = boxesPerLayer * layersPerSurface;
   }
   const barcode = firstNonEmpty([p.barcode, p.ean, p.ean13, p.upc, p.gtin]);
-  const productType = firstNonEmpty([p.product_type, p.type_label, p.hs_product_type]);
+  const costPrice = firstNonEmpty([p.cost_price, p.cost]);
+  const importPricePerSurface = firstNonEmpty([p.import_price_per_surface, p.import_price_surface]);
+  const importPricePer2Boxes = firstNonEmpty([p.import_price_per_2_boxes, p.import_price_2boxes]);
+  const wholesalePrice = firstNonEmpty([p.wholesale_price, p.stock_price]);
+  const salePrice = firstNonEmpty([p.sale_price, p.on_sale_price]);
+  const status = firstNonEmpty([p.status]);
+  const isDownloadableRaw = firstNonEmpty([p.is_downloadable, p.downloadable]);
+  const isDownloadable = isDownloadableRaw != null
+    ? ['1', 'true', 'yes'].includes(isDownloadableRaw.toLowerCase())
+    : false;
+  const downloadLink = firstNonEmpty([p.download_link, p.download_url]);
+  const subCategory = firstNonEmpty([p.sub_category, p.subcategory]);
+  const tagsRaw = firstNonEmpty([p.tags]);
+  const tags = tagsRaw ? tagsRaw.split(',').map((t: string) => t.trim()).filter(Boolean) : undefined;
+  const inventoryRaw = firstNonEmpty([p.inventory, p.stock_quantity]);
+  const inventory = inventoryRaw != null ? parseInt(inventoryRaw, 10) || undefined : undefined;
 
   const imageUrl = firstNonEmpty([p.image_url, p.product_image_url]);
   const permalink = firstNonEmpty([p.url, p.product_url]);
@@ -289,17 +304,27 @@ function mapHubSpotToWooProduct(
     detailedDescription,
     images: imageUrl ? [{ src: imageUrl }] : [],
     categories: parseCommaList(firstNonEmpty([p.categories, p.category])),
+    subCategory,
     type: 'simple',
     inStock,
+    inventory,
     purchasable: true,
     weight: firstNonEmpty([p.weight]),
     barcode,
-    productType,
+    costPrice,
+    importPricePerSurface,
+    importPricePer2Boxes,
+    wholesalePrice,
+    retailPrice: firstNonEmpty([p.hs_price, p.price]),
+    salePrice,
+    status,
+    isDownloadable,
+    downloadLink,
+    manufacturer,
+    tags,
     unitsPerBox,
     layersPerSurface,
     boxesPerSurface,
-    manufacturerId,
-    manufacturerName,
     boxesPerLayer,
     metadata: {
       source: 'hubspot',
@@ -307,12 +332,15 @@ function mapHubSpotToWooProduct(
       wooProductId,
       sku,
       barcode,
-      productType,
+      costPrice,
+      importPricePerSurface,
+      importPricePer2Boxes,
+      wholesalePrice,
+      salePrice,
       unitsPerBox,
       layersPerSurface,
       boxesPerSurface,
-      manufacturerId,
-      manufacturerName,
+      manufacturer,
       boxesPerLayer
     }
   };

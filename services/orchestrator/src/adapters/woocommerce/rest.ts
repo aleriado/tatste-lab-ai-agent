@@ -71,11 +71,8 @@ function toPositiveInt(value: unknown): number | undefined {
 }
 
 function normalizeProduct(raw: any): WooProduct {
-  const manufacturerIdRaw =
-    readMeta(raw, ['manufacturer_id', 'manufacturerId', 'supplier_id', 'vendor_id', 'brand_id']) ??
-    raw?.brands?.[0]?.id;
-  const manufacturerNameRaw =
-    readMeta(raw, ['manufacturer_name', 'manufacturer', 'supplier', 'vendor', 'brand']) ??
+  const manufacturerRaw =
+    readMeta(raw, ['manufacturer', 'manufacturer_name', 'supplier', 'vendor', 'brand']) ??
     raw?.brands?.[0]?.name;
   const boxesPerLayerRaw = readMeta(raw, [
     'boxes_per_layer',
@@ -102,7 +99,17 @@ function normalizeProduct(raw: any): WooProduct {
     'cartons_per_pallet'
   ]);
   const barcodeRaw = readMeta(raw, ['barcode', 'ean', 'ean13', 'upc', 'gtin']);
-  const productTypeRaw = readMeta(raw, ['product_type', 'type_label']);
+  const costPriceRaw = readMeta(raw, ['cost_price', 'cost']);
+  const importPricePerSurfaceRaw = readMeta(raw, ['import_price_per_surface', 'import_price_surface']);
+  const importPricePer2BoxesRaw = readMeta(raw, ['import_price_per_2_boxes', 'import_price_2boxes']);
+  const wholesalePriceRaw = readMeta(raw, ['wholesale_price', 'stock_price']);
+  const salePriceRaw = raw?.sale_price || readMeta(raw, ['sale_price', 'on_sale_price']);
+  const statusRaw = raw?.status ?? readMeta(raw, ['status']);
+  const isDownloadableRaw = raw?.downloadable ?? readMeta(raw, ['is_downloadable', 'downloadable']);
+  const downloadLinkRaw = readMeta(raw, ['download_link', 'download_url']);
+  const subCategoryRaw = readMeta(raw, ['sub_category', 'subcategory']);
+  const tagsRaw = Array.isArray(raw?.tags) ? raw.tags.map((t: any) => t.name ?? String(t)) : undefined;
+  const inventoryRaw = raw?.stock_quantity ?? readMeta(raw, ['inventory', 'stock_quantity']);
 
   return {
     id: String(raw?.id ?? ''),
@@ -118,32 +125,44 @@ function normalizeProduct(raw: any): WooProduct {
     categories: Array.isArray(raw?.categories)
       ? raw.categories.map((c: any) => ({ id: c.id, name: c.name }))
       : [],
+    subCategory: subCategoryRaw != null ? String(subCategoryRaw) : undefined,
     type: raw?.type ?? 'simple',
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
-    stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
+    inventory: typeof inventoryRaw === 'number' ? inventoryRaw : (typeof inventoryRaw === 'string' ? parseInt(inventoryRaw, 10) || undefined : undefined),
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
     upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
     purchasable: raw?.purchasable ?? true,
     weight: raw?.weight != null ? String(raw.weight) : undefined,
     barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
-    productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+    costPrice: costPriceRaw != null ? String(costPriceRaw) : undefined,
+    importPricePerSurface: importPricePerSurfaceRaw != null ? String(importPricePerSurfaceRaw) : undefined,
+    importPricePer2Boxes: importPricePer2BoxesRaw != null ? String(importPricePer2BoxesRaw) : undefined,
+    wholesalePrice: wholesalePriceRaw != null ? String(wholesalePriceRaw) : undefined,
+    retailPrice: raw?.price != null ? String(raw.price) : undefined,
+    salePrice: salePriceRaw != null && String(salePriceRaw).trim() !== '' ? String(salePriceRaw) : undefined,
+    status: statusRaw != null ? String(statusRaw) : undefined,
+    isDownloadable: isDownloadableRaw === true || isDownloadableRaw === 'true' || isDownloadableRaw === '1',
+    downloadLink: downloadLinkRaw != null ? String(downloadLinkRaw) : undefined,
+    manufacturer: manufacturerRaw != null ? String(manufacturerRaw) : undefined,
+    tags: tagsRaw,
     unitsPerBox: toPositiveInt(unitsPerBoxRaw),
     layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
     boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
-    manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
-    manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
     boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
     metadata: {
-      stockQuantity: typeof raw?.stock_quantity === 'number' ? raw.stock_quantity : undefined,
+      inventory: typeof inventoryRaw === 'number' ? inventoryRaw : undefined,
       weight: raw?.weight != null ? String(raw.weight) : undefined,
       barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
-      productType: productTypeRaw != null ? String(productTypeRaw) : undefined,
+      costPrice: costPriceRaw != null ? String(costPriceRaw) : undefined,
+      importPricePerSurface: importPricePerSurfaceRaw != null ? String(importPricePerSurfaceRaw) : undefined,
+      importPricePer2Boxes: importPricePer2BoxesRaw != null ? String(importPricePer2BoxesRaw) : undefined,
+      wholesalePrice: wholesalePriceRaw != null ? String(wholesalePriceRaw) : undefined,
+      salePrice: salePriceRaw != null ? String(salePriceRaw) : undefined,
       unitsPerBox: toPositiveInt(unitsPerBoxRaw),
       layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
       boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
-      manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
-      manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+      manufacturer: manufacturerRaw != null ? String(manufacturerRaw) : undefined,
       boxesPerLayer: toPositiveInt(boxesPerLayerRaw)
     }
   };
@@ -199,18 +218,30 @@ export function createRestWooAdapter(): WooCommerceAdapter {
         const limit = filters?.limit ?? 200;
         if (source === 'hubspot') {
           const hubspotProducts = await searchHubSpotProducts(query, limit);
+          logInfo(`HubSpot product search: fetched ${hubspotProducts.length} products`, { query, limit });
+          // STRICT: Filter to ensure only HubSpot-sourced products
+          const strictHubSpotOnly = hubspotProducts.filter((p) => p.metadata?.source === 'hubspot');
+          if (strictHubSpotOnly.length !== hubspotProducts.length) {
+            logInfo(`Filtered out ${hubspotProducts.length - strictHubSpotOnly.length} non-HubSpot products`, { 
+              total: hubspotProducts.length, 
+              hubspotOnly: strictHubSpotOnly.length 
+            });
+          }
           const byCategory = filters?.category
-            ? hubspotProducts.filter((p) =>
+            ? strictHubSpotOnly.filter((p) =>
                 (p.categories ?? []).some(
                   (c) =>
                     c.name.toLowerCase() === filters.category!.toLowerCase() ||
                     String(c.id) === filters.category
                 )
               )
-            : hubspotProducts;
+            : strictHubSpotOnly;
+          logInfo(`Returning ${byCategory.length} HubSpot products after filtering`, { query, limit });
           return byCategory.slice(0, limit);
         }
 
+        // WooCommerce source path
+        logInfo(`WooCommerce product search`, { query, limit });
         try {
           if (!hasWooRestConfigured()) return [];
           const params: Record<string, string> = {
@@ -220,7 +251,9 @@ export function createRestWooAdapter(): WooCommerceAdapter {
           if (filters?.category) params.category = filters.category;
 
           const data = await wooFetch<any[]>('/products', params);
-          return (Array.isArray(data) ? data : []).map(normalizeProduct);
+          const products = (Array.isArray(data) ? data : []).map(normalizeProduct);
+          logInfo(`Returning ${products.length} WooCommerce products`, { query, limit });
+          return products;
         } catch (err) {
           logError('Woo REST searchProducts failed', err);
           return [];
@@ -272,9 +305,10 @@ export function createRestWooAdapter(): WooCommerceAdapter {
           if (!product) return [];
 
           if (source === 'hubspot') {
+            // STRICT: Only use HubSpot products for related/cross-sell
             const queries = [
               product.categories?.[0]?.name ?? '',
-              product.manufacturerName ?? '',
+              product.manufacturer ?? '',
               ''
             ].filter((q, idx, arr) => q.trim().length > 0 || idx === arr.length - 1);
 
@@ -285,6 +319,8 @@ export function createRestWooAdapter(): WooCommerceAdapter {
               for (const p of batch) {
                 if (!p?.id) continue;
                 if (seen.has(p.id)) continue;
+                // STRICT: Only include products from HubSpot source
+                if (p.metadata?.source !== 'hubspot') continue;
                 seen.add(p.id);
                 pool.push(p);
               }
@@ -302,9 +338,9 @@ export function createRestWooAdapter(): WooCommerceAdapter {
               .map((p) => {
                 const pCats = (p.categories ?? []).map((c) => c.name);
                 const sameManufacturer =
-                  !!product.manufacturerName &&
-                  !!p.manufacturerName &&
-                  product.manufacturerName.toLowerCase() === p.manufacturerName.toLowerCase();
+                  !!product.manufacturer &&
+                  !!p.manufacturer &&
+                  product.manufacturer.toLowerCase() === p.manufacturer.toLowerCase();
                 const categoryOverlap = overlapCount(currentCats, pCats);
                 const score = (sameManufacturer ? 3 : 0) + categoryOverlap;
                 return { p, score };
@@ -313,10 +349,11 @@ export function createRestWooAdapter(): WooCommerceAdapter {
               .map((entry) => entry.p)
               .slice(0, 4);
 
-            if (ranked.length > 0) return ranked;
-            return [];
+            // STRICT: Return empty array if no HubSpot products found (no WooCommerce fallback)
+            return ranked;
           }
 
+          // WooCommerce source path
           if (!hasWooRestConfigured()) return [];
           const wooProductId = (product.metadata?.wooProductId as string | undefined) ?? productId;
 

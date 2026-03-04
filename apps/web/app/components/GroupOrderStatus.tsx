@@ -30,9 +30,9 @@ export default function GroupOrderStatus({ groupOrder, t }: Props) {
           {groupOrder.status}
         </span>
       </div>
-      {groupOrder.manufacturerId && (
+      {groupOrder.manufacturer && (
         <div className="group-order-meta-row">
-          Manufacturer: <strong>{groupOrder.manufacturerId}</strong>
+          Manufacturer: <strong>{groupOrder.manufacturer}</strong>
         </div>
       )}
       {groupOrder.progress && (

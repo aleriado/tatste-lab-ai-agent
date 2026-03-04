@@ -133,14 +133,12 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'group_create',
-      description: 'Create a new group order. Returns a shareable code for others to join. Group orders support one manufacturer only and MOQ progress is tracked live.',
+      description: 'Create a new group order. Returns a shareable code for others to join. MOQ (minimum surfaces/pallets) is automatically set from system configuration. Group orders support one manufacturer only.',
       parameters: {
         type: 'object',
         properties: {
-          moqTarget: { type: 'number', description: 'Minimum order quantity target (total items needed)' },
-          deadlineHours: { type: 'number', description: 'Hours until the group order expires (optional)' }
-        },
-        required: ['moqTarget']
+          deadlineHours: { type: 'number', description: 'Hours until the group order expires (optional, e.g., 48 for 2 days)' }
+        }
       }
     }
   },
@@ -208,7 +206,7 @@ export const conciergeTools: ChatCompletionTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          manufacturerId: { type: 'string', description: 'Optional manufacturer ID to filter compatible orders.' },
+          manufacturer: { type: 'string', description: 'Optional manufacturer name to filter compatible orders.' },
           limit: { type: 'number', description: 'Max group orders to return (default 10).' }
         }
       }
@@ -233,13 +231,13 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'group_add_item',
-      description: 'Add a product to a group order. All products in a single group order must be from the same manufacturer. MOQ progress follows layer rules per product.',
+      description: 'Add a product to a group order. IMPORTANT: quantity is in UNITS (individual items), NOT boxes. The system automatically rounds up to full boxes for wholesale ordering. Example: quantity=1 means 1 unit (1 jar/bottle), quantity=15 with 12 units/box means 2 boxes (24 units). All products in a group order must be from the same manufacturer.',
       parameters: {
         type: 'object',
         properties: {
           code: { type: 'string', description: 'The group order code' },
           productId: { type: 'string', description: 'Product ID to add' },
-          quantity: { type: 'number', description: 'Quantity to add (default 1)' },
+          quantity: { type: 'number', description: 'Quantity in UNITS (individual items), not boxes. Default is 1 unit. System rounds up to full boxes automatically.' },
           variantId: { type: 'string', description: 'Variant ID if applicable' }
         },
         required: ['code', 'productId']

@@ -302,7 +302,7 @@ model IntegrationAccount {
 }
 
 //
-// M2: GroupOrder with full lifecycle
+// M2: GroupOrder with full lifecycle + strict surface/layer allocation
 //
 
 model GroupOrder {
@@ -315,15 +315,19 @@ model GroupOrder {
   createdByCustomerId String
   createdByCustomer   Customer @relation("GroupOrderCreator", fields: [createdByCustomerId], references: [id])
 
-  // Manufacturer constraint (Gil)
+  // Manufacturer constraint (CLIENT RULE 1: one manufacturer per group order)
   manufacturerId String? @db.VarChar(128)
 
   status GroupOrderStatus @default(DRAFT)
   constraintsJson Json?
 
-  // MOQ tracking
-  moqTarget  Int @default(1)
-  moqCurrent Int @default(0)
+  // MOQ tracking (CLIENT RULE 7: MOQ in surfaces/pallets, not boxes)
+  moqSurfaces      Int @default(1) // from env GROUP_ORDER_DEFAULT_MOQ_SURFACES
+  moqTarget        Int @default(1) // DEPRECATED: kept for backward compatibility
+  moqCurrent       Int @default(0) // DEPRECATED: kept for backward compatibility
+  
+  // CLIENT RULE 4: surface_max_layers = MIN(layers_per_surface) across all products
+  surfaceMaxLayers Int? // calculated when first product added
 
   expiresAt DateTime?
 
@@ -331,11 +335,62 @@ model GroupOrder {
 
   // Relations
   participants GroupOrderParticipant[]
-  items        GroupOrderItem[]
+  items        GroupOrderItem[] // User-level tracking (kept for backward compatibility)
+  surfaces     GroupOrderSurface[] // NEW: Surface/layer allocation
 
   @@index([manufacturerId])
   @@index([status])
   @@index([code])
+}
+
+// CLIENT RULE 2: Each surface/pallet has multiple layers
+model GroupOrderSurface {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groupOrderId String
+  groupOrder   GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+
+  surfaceIndex Int // 0-based index (surface 0, 1, 2...)
+  maxLayers    Int // snapshot of surface_max_layers at creation time
+  status       String @default("open") @db.VarChar(32) // open, full, locked
+
+  layers GroupOrderLayer[]
+
+  @@unique([groupOrderId, surfaceIndex])
+  @@index([groupOrderId])
+}
+
+// CLIENT RULE 3: One product type per layer
+model GroupOrderLayer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  surfaceId String
+  surface   GroupOrderSurface @relation(fields: [surfaceId], references: [id], onDelete: Cascade)
+
+  layerIndex Int // 0-based index within surface
+  productId  String
+  variantId  String?
+
+  // CLIENT RULE 6: Layer capacity from product metadata
+  capacityBoxes Int
+  capacityUnits Int
+
+  // Current fill (CLIENT RULE 5: fill existing layers first)
+  filledBoxes Int @default(0)
+  filledUnits Int @default(0)
+
+  status String @default("open") @db.VarChar(32) // open, full
+
+  // Audit: which customers contributed to this layer
+  contributions Json? // [{customerId, boxes, units, timestamp}]
+
+  @@unique([surfaceId, layerIndex])
+  @@index([surfaceId])
+  @@index([productId])
 }
 
 model GroupOrderParticipant {

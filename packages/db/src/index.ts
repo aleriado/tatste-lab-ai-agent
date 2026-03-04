@@ -1,12 +1,17 @@
 import { PrismaClient, IntegrationProvider } from '@prisma/client';
 import type { Channel, MessageDirection, Customer, Thread, Cart, CartItem, GroupOrderStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { getGroupOrderConfig } from './groupOrder/config';
 
 // Prisma client singleton
 const prisma = new PrismaClient();
 
 export { prisma, IntegrationProvider };
 export type { Channel, MessageDirection, Customer, Thread };
+
+// ─── Group Order (New Algorithm) ───
+export { addItemToGroupOrder } from './groupOrder/service';
+export type { AddItemToGroupOrderInput, AddItemToGroupOrderResult } from './groupOrder/service';
 
 // ─── Customer & Identity ───
 
@@ -294,7 +299,8 @@ export interface GroupOrderFull {
   status: GroupOrderStatus;
   moqTarget: number;
   moqCurrent: number;
-  manufacturerId: string | null;
+  /** Manufacturer name (stored in DB as manufacturerId column) */
+  manufacturer: string | null;
   expiresAt: Date | null;
   createdByCustomerId: string;
   participants: { customerId: string; createdAt: Date }[];
@@ -325,15 +331,15 @@ export interface AddGroupOrderItemInput {
 }
 
 interface GroupOrderItemRuleMetadata {
-  manufacturerId?: string;
-  manufacturerName?: string;
+  manufacturer?: string;
   boxesPerLayer?: number;
 }
 
 export interface DiscoverableGroupOrder {
   code: string;
   status: GroupOrderStatus;
-  manufacturerId: string | null;
+  /** Manufacturer name (stored in DB as manufacturerId column) */
+  manufacturer: string | null;
   moqTarget: number;
   moqCurrent: number;
   remainingToTarget: number;
@@ -439,11 +445,20 @@ function checkExpiry(go: { id: string; status: GroupOrderStatus; expiresAt: Date
   }
 }
 
-export async function createGroupOrder(customerId: string, moqTarget: number, deadlineHours?: number): Promise<GroupOrderFull> {
+export async function createGroupOrder(customerId: string, deadlineHours?: number): Promise<GroupOrderFull> {
+  const config = getGroupOrderConfig();
   const code = generateGroupCode();
   const expiresAt = deadlineHours ? new Date(Date.now() + deadlineHours * 60 * 60 * 1000) : null;
   const created = await prisma.groupOrder.create({
-    data: { code, createdByCustomerId: customerId, status: 'OPEN', moqTarget, moqCurrent: 0, expiresAt }
+    data: { 
+      code, 
+      createdByCustomerId: customerId, 
+      status: 'OPEN', 
+      moqSurfaces: config.defaultMoqSurfaces,
+      moqTarget: 1, // DEPRECATED: kept for backward compatibility
+      moqCurrent: 0, // DEPRECATED: kept for backward compatibility
+      expiresAt 
+    }
   });
   await prisma.groupOrderParticipant.create({
     data: { groupOrderId: created.id, customerId }
@@ -513,12 +528,12 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
   }
   const qty = input.quantity ?? 1;
   const itemMeta = ((input.metadata as GroupOrderItemRuleMetadata | null) ?? {});
-  const manufacturerId = itemMeta.manufacturerId?.trim();
-  if (!manufacturerId) {
+  const manufacturer = itemMeta.manufacturer?.trim();
+  if (!manufacturer) {
     throw new Error('Product is missing manufacturer metadata. Cannot add to a group order.');
   }
 
-  if (go.manufacturerId && go.manufacturerId !== manufacturerId) {
+  if (go.manufacturerId && go.manufacturerId !== manufacturer) {
     throw new Error(`Group order ${code} is locked to manufacturer "${go.manufacturerId}".`);
   }
 
@@ -541,10 +556,9 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
     await prisma.groupOrder.update({
       where: { id: go.id },
       data: {
-        manufacturerId,
+        manufacturerId: manufacturer,
         constraintsJson: {
-          manufacturerId,
-          manufacturerName: itemMeta.manufacturerName ?? null
+          manufacturer
         } as any
       }
     });
@@ -579,7 +593,7 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
   });
   return {
     id: go.id, code: go.code, status: go.status, moqTarget: go.moqTarget, moqCurrent: go.moqCurrent,
-    manufacturerId: go.manufacturerId,
+    manufacturer: go.manufacturerId,
     expiresAt: go.expiresAt, createdByCustomerId: go.createdByCustomerId,
     participants: go.participants,
     items: go.items.map((i) => ({ ...i, unitPrice: Number(i.unitPrice).toFixed(2) })),
@@ -615,7 +629,7 @@ export async function listDiscoverableGroupOrders(params?: {
   return orders.map((go) => ({
     code: go.code,
     status: go.status,
-    manufacturerId: go.manufacturerId,
+    manufacturer: go.manufacturerId,
     moqTarget: go.moqTarget,
     moqCurrent: go.moqCurrent,
     remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),

@@ -25,23 +25,48 @@ export interface InboundMessagePayload {
 export interface ProductCard {
   id: string;
   name: string;
+  /** Retail price (מחיר קמעונאי) */
   price?: string;
   imageUrl?: string;
   shortDescription?: string;
   description?: string;
   detailedDescription?: string;
   categories?: string[];
+  subCategory?: string;
   type?: 'simple' | 'variable';
   inStock?: boolean;
-  stockQuantity?: number;
-  manufacturerId?: string;
-  manufacturerName?: string;
+  /** Current inventory count (מלאי) */
+  inventory?: number;
+  /** Manufacturer name (יצרן) */
+  manufacturer?: string;
+  tags?: string[];
   weight?: string;
   barcode?: string;
-  productType?: string;
+  /** Cost price in ILS (מחיר עלות בארץ) */
+  costPrice?: string;
+  /** Import price per surface (מחיר יבוא למשטח) */
+  importPricePerSurface?: string;
+  /** Import price per 2 boxes (מחירי יבוא לשני קרטונים) */
+  importPricePer2Boxes?: string;
+  /** Wholesale price (מחיר סיטונאי) */
+  wholesalePrice?: string;
+  /** Retail price (מחיר קמעונאי) */
+  retailPrice?: string;
+  /** Sale price (מחיר מבצע) */
+  salePrice?: string;
+  /** Product status (סטטוס) */
+  status?: string;
+  /** Whether the product is downloadable (ניתן להורדה) */
+  isDownloadable?: boolean;
+  /** Download link (קישור להורדה) */
+  downloadLink?: string;
+  /** Units per box (יחידות בקרטון) */
   unitsPerBox?: number;
+  /** Boxes per layer (קרטונים בשכבה) */
   boxesPerLayer?: number;
+  /** Layers per surface (מספר שכבות במשטח) */
   layersPerSurface?: number;
+  /** Boxes per surface (קרטונים במשטח) */
   boxesPerSurface?: number;
 }
 
@@ -68,7 +93,8 @@ export interface GroupOrderSnapshot {
   status: string;
   moqCurrent: number;
   moqTarget: number;
-  manufacturerId?: string | null;
+  /** Manufacturer name used as the group order constraint */
+  manufacturer?: string | null;
   participantCount: number;
   expiresAt?: string;
   progress?: {

@@ -22,7 +22,7 @@ export interface UiText {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
-  productSpec: string; productType: string; manufacturer: string; manufacturerId: string; barcode: string; weight: string;
+  productSpec: string; manufacturer: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -49,7 +49,7 @@ const UI_TEXT: Record<Lang, {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
-  productSpec: string; productType: string; manufacturer: string; manufacturerId: string; barcode: string; weight: string;
+  productSpec: string; manufacturer: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -75,12 +75,10 @@ const UI_TEXT: Record<Lang, {
     inStock: "In Stock",
     outOfStock: "Out of Stock",
     productSpec: "Product Specs",
-    productType: "Product type",
     manufacturer: "Manufacturer",
-    manufacturerId: "Manufacturer ID",
     barcode: "Barcode",
     weight: "Weight",
-    stockUnits: "Stock units",
+    stockUnits: "Inventory",
     unitsPerBox: "Units per box",
     boxesPerLayer: "Boxes per layer",
     layersPerSurface: "Layers per pallet",
@@ -118,12 +116,10 @@ const UI_TEXT: Record<Lang, {
     inStock: "במלאי",
     outOfStock: "אזל מהמלאי",
     productSpec: "מפרט מוצר",
-    productType: "סוג מוצר",
     manufacturer: "יצרן",
-    manufacturerId: "מזהה יצרן",
     barcode: "ברקוד",
     weight: "משקל",
-    stockUnits: "יחידות במלאי",
+    stockUnits: "מלאי",
     unitsPerBox: "יחידות בקרטון",
     boxesPerLayer: "קרטונים בשכבה",
     layersPerSurface: "שכבות במשטח",

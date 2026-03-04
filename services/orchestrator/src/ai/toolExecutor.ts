@@ -15,8 +15,10 @@ import {
   getGroupOrderStatus,
   listDiscoverableGroupOrders,
   findBestGroupOrdersForManufacturer,
-  deleteGroupOrderByCreator
+  deleteGroupOrderByCreator,
+  addItemToGroupOrder
 } from '@taste-labs/db';
+import type { ProductLogistics } from '@taste-labs/db/src/groupOrder/types';
 import { getPaymentAdapter } from '../adapters/payment';
 import { logInfo, logError } from '../logger';
 
@@ -31,10 +33,53 @@ export interface ToolResult {
   products?: WooProduct[];
 }
 
+/**
+ * Extract product logistics for group order allocation
+ * 
+ * Validates that all required fields are present for the strict allocation algorithm.
+ */
+function extractProductLogistics(product: WooProduct): ProductLogistics | null {
+  const manufacturer = product.manufacturer ?? product.metadata?.manufacturer as string | undefined;
+  const unitsPerBox = product.unitsPerBox ?? product.metadata?.unitsPerBox as number | undefined;
+  const boxesPerLayer = product.boxesPerLayer ?? product.metadata?.boxesPerLayer as number | undefined;
+  const layersPerSurface = product.layersPerSurface ?? product.metadata?.layersPerSurface as number | undefined;
+  const boxesPerSurface = product.boxesPerSurface ?? product.metadata?.boxesPerSurface as number | undefined;
+
+  // Validate all required fields
+  if (!manufacturer || typeof manufacturer !== 'string' || manufacturer.trim() === '') {
+    return null;
+  }
+
+  if (!unitsPerBox || typeof unitsPerBox !== 'number' || unitsPerBox <= 0) {
+    return null;
+  }
+
+  if (!boxesPerLayer || typeof boxesPerLayer !== 'number' || boxesPerLayer <= 0) {
+    return null;
+  }
+
+  if (!layersPerSurface || typeof layersPerSurface !== 'number' || layersPerSurface <= 0) {
+    return null;
+  }
+
+  return {
+    productId: product.id,
+    variantId: null,
+    name: product.name,
+    manufacturer: manufacturer.trim(),
+    unitsPerBox,
+    boxesPerLayer,
+    layersPerSurface,
+    boxesPerSurface: boxesPerSurface ?? (boxesPerLayer * layersPerSurface)
+  };
+}
+
+/**
+ * Legacy metadata extractor for backward compatibility
+ */
 function productGroupOrderMetadata(product: WooProduct) {
   return {
-    manufacturerId: product.manufacturerId ?? product.metadata?.manufacturerId,
-    manufacturerName: product.manufacturerName ?? product.metadata?.manufacturerName,
+    manufacturer: product.manufacturer ?? product.metadata?.manufacturer,
     boxesPerLayer: product.boxesPerLayer ?? (product.metadata?.boxesPerLayer as number | undefined)
   };
 }
@@ -187,7 +232,6 @@ export async function executeTool(
     case 'group_create': {
       const go = await createGroupOrder(
         ctx.customerId,
-        args.moqTarget as number,
         args.deadlineHours as number | undefined
       );
       return { data: go };
@@ -215,7 +259,7 @@ export async function executeTool(
 
     case 'group_discover': {
       const orders = await listDiscoverableGroupOrders({
-        manufacturerId: (args.manufacturerId as string | undefined) ?? undefined,
+        manufacturerId: (args.manufacturer as string | undefined) ?? undefined,
         limit: (args.limit as number | undefined) ?? 10
       });
       return { data: { orders } };
@@ -227,7 +271,7 @@ export async function executeTool(
       if (!product) return { data: { error: `Product ${productId} not found` } };
 
       const groupMeta = productGroupOrderMetadata(product);
-      if (!groupMeta.manufacturerId) {
+      if (!groupMeta.manufacturer) {
         return {
           data: {
             error: `Product "${product.name}" is missing manufacturer mapping, so I can't find compatible group orders.`
@@ -236,7 +280,7 @@ export async function executeTool(
       }
 
       const matches = await findBestGroupOrdersForManufacturer({
-        manufacturerId: String(groupMeta.manufacturerId),
+        manufacturerId: String(groupMeta.manufacturer),
         limit: (args.limit as number | undefined) ?? 3
       });
 
@@ -244,7 +288,7 @@ export async function executeTool(
         data: {
           productId: product.id,
           productName: product.name,
-          manufacturerId: String(groupMeta.manufacturerId),
+          manufacturer: String(groupMeta.manufacturer),
           orders: matches
         }
       };
@@ -252,47 +296,99 @@ export async function executeTool(
 
     case 'group_add_item': {
       const productId = args.productId as string;
+      const code = args.code as string;
+      const quantity = (args.quantity as number) ?? 1;
+      
       const product = await woo.getProduct(productId);
-      if (!product) return { data: { error: `Product ${productId} not found` } };
+      if (!product) {
+        logInfo(`group_add_item: product not found productId=${productId}`, { traceId: ctx.traceId });
+        return { data: { error: `Product ${productId} not found` } };
+      }
 
       // Validate purchasable & price
       if (product.purchasable === false) {
+        logInfo(`group_add_item: product not purchasable productId=${productId}`, { traceId: ctx.traceId });
         return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
       }
       const groupUnitPrice = parseFloat(product.price ?? '');
       if (!product.price || product.price.trim() === '' || isNaN(groupUnitPrice) || groupUnitPrice <= 0) {
+        logInfo(`group_add_item: product missing/invalid price productId=${productId}`, { traceId: ctx.traceId });
         return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added.` } };
       }
       if (product.inStock === false) {
+        logInfo(`group_add_item: product out of stock productId=${productId}`, { traceId: ctx.traceId });
         return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
       }
 
-      const groupMeta = productGroupOrderMetadata(product);
-      if (!groupMeta.manufacturerId) {
+      // Extract product logistics for new allocation algorithm
+      const logistics = extractProductLogistics(product);
+      if (!logistics) {
+        logInfo(`group_add_item: product missing logistics productId=${productId} name="${product.name}"`, { traceId: ctx.traceId });
         return {
           data: {
-            error: `Product "${product.name}" is missing manufacturer mapping. Group orders require products from one manufacturer.`
-          }
-        };
-      }
-      if (!groupMeta.boxesPerLayer || groupMeta.boxesPerLayer <= 0) {
-        return {
-          data: {
-            error: `Product "${product.name}" is missing valid boxes-per-layer metadata required for MOQ tracking.`
+            error: `Product "${product.name}" is missing required logistics data (manufacturer, unitsPerBox, boxesPerLayer, layersPerSurface). Cannot add to group order.`
           }
         };
       }
 
-      const go = await addGroupOrderItem(args.code as string, ctx.customerId, {
-        productId,
-        variantId: (args.variantId as string) ?? null,
-        name: product.name,
-        imageUrl: product.images?.[0]?.src ?? null,
-        unitPrice: groupUnitPrice,
-        quantity: (args.quantity as number) ?? 1,
-        metadata: groupMeta
-      });
-      return { data: go };
+      try {
+        // Use new strict allocation service
+        const result = await addItemToGroupOrder({
+          code,
+          customerId: ctx.customerId,
+          product: logistics,
+          quantityUnits: quantity,
+          productName: product.name,
+          unitPrice: groupUnitPrice,
+          imageUrl: product.images?.[0]?.src ?? null
+        });
+
+        if (!result.success) {
+          logInfo(`group_add_item: allocation failed productId=${productId} code=${code}`, { 
+            traceId: ctx.traceId, 
+            error: result.error 
+          });
+
+          // Return detailed error message based on error code
+          let userMessage = result.error?.message ?? 'Failed to add item to group order';
+          
+          if (result.error?.code === 'MANUFACTURER_MISMATCH') {
+            userMessage = `This group order is locked to manufacturer "${result.error.details.groupOrderManufacturer}". Product "${product.name}" is from "${result.error.details.productManufacturer}".`;
+          } else if (result.error?.code === 'OVERFLOW') {
+            userMessage = `Cannot add ${quantity} units - would exceed group order capacity. ${result.error.message}`;
+          } else if (result.error?.code === 'LAYER_LIMIT_CONFLICT') {
+            userMessage = `Cannot add this product - it would reduce the allowed layers per surface below currently opened layers.`;
+          }
+
+          return { data: { error: userMessage, details: result.error } };
+        }
+
+        // Success - get updated group order status
+        const go = await getGroupOrderStatus(code);
+        logInfo(`group_add_item: success productId=${productId} code=${code}`, { 
+          traceId: ctx.traceId,
+          allocatedBoxes: result.allocatedBoxes,
+          allocatedUnits: result.allocatedUnits,
+          surfacesOpened: result.surfacesOpened,
+          layersOpened: result.layersOpened
+        });
+        
+        return { 
+          data: {
+            ...go,
+            allocationResult: {
+              allocatedBoxes: result.allocatedBoxes,
+              allocatedUnits: result.allocatedUnits,
+              surfacesOpened: result.surfacesOpened,
+              layersOpened: result.layersOpened
+            }
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`group_add_item: service error productId=${productId} code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
     }
 
     case 'group_remove_item': {
