@@ -42,6 +42,9 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
 
   const specRows: Array<{ label: string; value?: string | number | boolean }> = [
     { label: t.manufacturer, value: product.manufacturer },
+    { label: t.brand, value: product.brand },
+    { label: t.countryOfOrigin, value: product.countryOfOrigin },
+    { label: t.sku, value: product.sku },
     { label: t.barcode, value: product.barcode },
     { label: t.weight, value: product.weight },
     { label: t.stockUnits, value: product.inventory },
@@ -123,9 +126,12 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
                 </div>
               )}
               {(product.detailedDescription ?? product.description ?? product.shortDescription) && (
-                <div className="modal-description">
-                  {product.detailedDescription ?? product.description ?? product.shortDescription}
-                </div>
+                <div
+                  className="modal-description"
+                  dangerouslySetInnerHTML={{
+                    __html: product.detailedDescription ?? product.description ?? product.shortDescription ?? ''
+                  }}
+                />
               )}
               <div className="modal-specs">
                 <div className="modal-specs-title">{t.productSpec}</div>

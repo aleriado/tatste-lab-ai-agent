@@ -6,7 +6,7 @@
  */
 
 import { allocateToGroupOrder } from './allocation';
-import { loadGroupOrderState, saveAllocationResult } from './repository';
+import { loadGroupOrderState, saveAllocationResult, recalcMoq, ensureParticipant } from './repository';
 import type { AllocationInput, AllocationResult, ProductLogistics } from './types';
 
 export interface AddItemToGroupOrderInput {
@@ -93,13 +93,15 @@ export async function addItemToGroupOrder(
       imageUrl,
       product.manufacturer,
       product.boxesPerLayer,
-      product.unitsPerBox
+      product.unitsPerBox,
+      product.layersPerSurface
     );
 
+    // Auto-join: ensure the customer is a participant (implicit join on first add)
+    await ensureParticipant(groupOrder.id, customerId);
+
     // Update moqCurrent for backward compatibility (used by group_discover)
-    // This is a temporary bridge until we fully migrate to surface-based MOQ
     console.log(`[service] Calling recalcMoq for groupOrderId=${groupOrder.id}, code=${code}`);
-    const { recalcMoq } = await import('../index.js');
     const updatedMoqCurrent = await recalcMoq(groupOrder.id);
     console.log(`[service] recalcMoq completed: groupOrderId=${groupOrder.id}, updatedMoqCurrent=${updatedMoqCurrent}`);
 

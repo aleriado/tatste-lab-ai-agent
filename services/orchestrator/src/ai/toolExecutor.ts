@@ -19,8 +19,7 @@ import {
   addItemToGroupOrder
 } from '@taste-labs/db';
 import type { ProductLogistics } from '@taste-labs/db/src/groupOrder/types';
-import { getPaymentAdapter } from '../adapters/payment';
-import { logInfo, logError } from '../logger';
+import { getPaymentAdapter } from '../adapters/payment';import { logInfo, logError } from '../logger';
 
 export interface ToolContext {
   customerId: string;
@@ -383,6 +382,60 @@ export async function executeTool(
         logError(`group_add_item: service error productId=${productId} code=${code}`, { traceId: ctx.traceId, err });
         return { data: { error: msg } };
       }
+    }
+
+    case 'group_checkout': {
+      const code = args.code as string;
+      const go = await getGroupOrderStatus(code);
+
+      if (go.status !== 'MOQ_REACHED') {
+        return {
+          data: {
+            error: `Group order ${code} has not reached MOQ yet (status: ${go.status}). MOQ must be reached before checkout.`,
+            moqCurrent: go.moqCurrent,
+            moqTarget: go.moqTarget
+          }
+        };
+      }
+
+      // Find this participant's cost
+      const myEntry = go.participantCosts?.find(p => p.customerId === ctx.customerId);
+      if (!myEntry || parseFloat(myEntry.total) <= 0) {
+        return {
+          data: {
+            error: `You don't have any items in group order ${code}. Add products before checking out.`
+          }
+        };
+      }
+
+      const myTotal = parseFloat(myEntry.total);
+      const payment = getPaymentAdapter();
+      const result = await payment.createCheckoutSession({
+        customerId: ctx.customerId,
+        cartTotal: myTotal,
+        currency: 'ILS',
+        splitPayment: true,
+        groupOrderId: go.id,
+        meta: {
+          groupOrderCode: code,
+          products: myEntry.products,
+          participantShare: myEntry.total,
+          orderTotal: go.participantCosts?.reduce((s, p) => s + parseFloat(p.total), 0).toFixed(2)
+        }
+      });
+
+      return {
+        data: {
+          message: `Checkout ready for group order ${code}`,
+          groupOrderCode: code,
+          yourTotal: myEntry.total,
+          products: myEntry.products,
+          paymentUrl: result.paymentUrl,
+          amountDueNow: result.amountDueNow,
+          amountDueLater: result.amountDueLater,
+          currency: result.currency
+        }
+      };
     }
 
     case 'group_remove_item': {

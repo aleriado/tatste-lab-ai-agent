@@ -22,7 +22,7 @@ export interface UiText {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
-  productSpec: string; manufacturer: string; barcode: string; weight: string;
+  productSpec: string; manufacturer: string; brand: string; countryOfOrigin: string; sku: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -49,7 +49,7 @@ const UI_TEXT: Record<Lang, {
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
   addToCart: string; details: string; inStock: string; outOfStock: string;
-  productSpec: string; manufacturer: string; barcode: string; weight: string;
+  productSpec: string; manufacturer: string; brand: string; countryOfOrigin: string; sku: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
@@ -76,6 +76,9 @@ const UI_TEXT: Record<Lang, {
     outOfStock: "Out of Stock",
     productSpec: "Product Specs",
     manufacturer: "Manufacturer",
+    brand: "Brand",
+    countryOfOrigin: "Country of Origin",
+    sku: "SKU",
     barcode: "Barcode",
     weight: "Weight",
     stockUnits: "Inventory",
@@ -117,6 +120,9 @@ const UI_TEXT: Record<Lang, {
     outOfStock: "אזל מהמלאי",
     productSpec: "מפרט מוצר",
     manufacturer: "יצרן",
+    brand: "מותג",
+    countryOfOrigin: "ארץ מקור",
+    sku: "מק״ט",
     barcode: "ברקוד",
     weight: "משקל",
     stockUnits: "מלאי",

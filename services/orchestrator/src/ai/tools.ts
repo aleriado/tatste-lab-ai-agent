@@ -258,5 +258,19 @@ export const conciergeTools: ChatCompletionTool[] = [
         required: ['code', 'productId']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'group_checkout',
+      description: 'Initiate checkout for a MOQ_REACHED group order. Locks the order and generates a payment link for the current participant based on their share of the order. Only works when the group order status is MOQ_REACHED.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The group order code' }
+        },
+        required: ['code']
+      }
+    }
   }
 ];

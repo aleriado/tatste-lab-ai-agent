@@ -37,8 +37,14 @@ export interface ProductCard {
   inStock?: boolean;
   /** Current inventory count (מלאי) */
   inventory?: number;
-  /** Manufacturer name (יצרן) */
+  /** Manufacturer / supplier name (יצרן / ספק) */
   manufacturer?: string;
+  /** Brand name (מותג) */
+  brand?: string;
+  /** Country of origin (ארץ מקור) */
+  countryOfOrigin?: string;
+  /** SKU / barcode (ברקוד) */
+  sku?: string;
   tags?: string[];
   weight?: string;
   barcode?: string;
@@ -119,6 +125,7 @@ export interface GroupOrderSnapshot {
       layerIndex: number;
       productId: string;
       productName?: string;
+      unitPrice?: string;
       variantId: string | null;
       capacityBoxes: number;
       capacityUnits: number;
@@ -126,6 +133,11 @@ export interface GroupOrderSnapshot {
       filledUnits: number;
       status: string;
     }[];
+  }[];
+  participantCosts?: {
+    customerId: string;
+    total: string;
+    products: { name: string; units: number; cost: string }[];
   }[];
 }
 

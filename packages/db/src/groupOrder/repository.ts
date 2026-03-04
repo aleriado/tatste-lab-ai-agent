@@ -5,9 +5,13 @@
  * and row-level locking for concurrency safety.
  */
 
-import { prisma } from '../index';
+import { PrismaClient } from '@prisma/client';
 import type { GroupOrderState, AllocationResult, LayerContribution } from './types';
 import { getGroupOrderConfig } from './config';
+import type { GroupOrderStatus } from '@prisma/client';
+
+// Use a module-level singleton to avoid circular dep with index.ts
+const prisma = new PrismaClient();
 
 /**
  * Load current group order state from database
@@ -84,7 +88,8 @@ export async function saveAllocationResult(
   imageUrl: string | null,
   manufacturer: string,
   boxesPerLayer: number,
-  unitsPerBox: number
+  unitsPerBox: number,
+  layersPerSurface: number
 ): Promise<void> {
   if (!result.success) {
     throw new Error(`Cannot save failed allocation: ${result.error?.message}`);
@@ -102,20 +107,19 @@ export async function saveAllocationResult(
     }
 
     // Update manufacturer and surfaceMaxLayers if this is the first product
-    let currentSurfaceMaxLayers = groupOrder.surfaceMaxLayers;
-    
-    if (!groupOrder.manufacturerId) {
-      currentSurfaceMaxLayers = result.layersUsed.length > 0 ? 
-        (await tx.groupOrderSurface.findFirst({
-          where: { groupOrderId },
-          orderBy: { surfaceIndex: 'asc' }
-        }))?.maxLayers ?? 1 : 1;
+    // surfaceMaxLayers = MIN(layersPerSurface) across all products in this order.
+    // On first product, initialize from the product's layersPerSurface.
+    // On subsequent products, take the minimum (enforced by allocation algorithm).
+    const newSurfaceMaxLayers = groupOrder.surfaceMaxLayers !== null
+      ? Math.min(groupOrder.surfaceMaxLayers, layersPerSurface)
+      : layersPerSurface;
 
+    if (!groupOrder.manufacturerId || groupOrder.surfaceMaxLayers !== newSurfaceMaxLayers) {
       await tx.groupOrder.update({
         where: { id: groupOrderId },
         data: {
           manufacturerId: manufacturer,
-          surfaceMaxLayers: currentSurfaceMaxLayers
+          surfaceMaxLayers: newSurfaceMaxLayers
         }
       });
     }
@@ -133,12 +137,12 @@ export async function saveAllocationResult(
       });
 
       if (!surface) {
-        // Create new surface
+        // Create new surface with correct layer capacity from product logistics
         surface = await tx.groupOrderSurface.create({
           data: {
             groupOrderId,
             surfaceIndex: layerAlloc.surfaceIndex,
-            maxLayers: groupOrder.surfaceMaxLayers ?? 1,
+            maxLayers: newSurfaceMaxLayers,
             status: 'open'
           }
         });
@@ -155,7 +159,6 @@ export async function saveAllocationResult(
       });
 
       if (!layer) {
-        // Create new layer - use product's actual capacity
         const contribution: LayerContribution = {
           customerId,
           boxes: layerAlloc.boxes,
@@ -171,14 +174,13 @@ export async function saveAllocationResult(
             variantId,
             capacityBoxes: boxesPerLayer,
             capacityUnits: boxesPerLayer * unitsPerBox,
-            filledBoxes: layerAlloc.boxes,
+            filledBoxes: Math.floor(layerAlloc.units / unitsPerBox),
             filledUnits: layerAlloc.units,
-            status: layerAlloc.boxes >= boxesPerLayer ? 'full' : 'open',
+            status: layerAlloc.units >= boxesPerLayer * unitsPerBox ? 'full' : 'open',
             contributions: [contribution] as any
           }
         });
       } else {
-        // Update existing layer
         const existingContributions = (layer.contributions as LayerContribution[] | null) ?? [];
         const newContribution: LayerContribution = {
           customerId,
@@ -187,9 +189,9 @@ export async function saveAllocationResult(
           timestamp: new Date().toISOString()
         };
 
-        const newFilledBoxes = layer.filledBoxes + layerAlloc.boxes;
         const newFilledUnits = layer.filledUnits + layerAlloc.units;
-        const isFull = newFilledBoxes >= layer.capacityBoxes;
+        const newFilledBoxes = Math.floor(newFilledUnits / unitsPerBox);
+        const isFull = newFilledUnits >= layer.capacityUnits;
 
         await tx.groupOrderLayer.update({
           where: { id: layer.id },
@@ -251,4 +253,138 @@ export async function saveAllocationResult(
       });
     }
   });
+}
+
+/**
+ * Ensure a customer is registered as a participant in the group order.
+ * Called automatically when adding an item — joining is implicit on first add.
+ */
+export async function ensureParticipant(groupOrderId: string, customerId: string): Promise<void> {
+  await prisma.groupOrderParticipant.upsert({
+    where: { groupOrderId_customerId: { groupOrderId, customerId } },
+    create: { groupOrderId, customerId },
+    update: {}
+  });
+}
+
+/**
+ * Recalculate moqCurrent for a group order and persist it.
+ * Moved here from index.ts to break the circular dependency:
+ *   index.ts → service.ts → index.ts
+ */
+export async function recalcMoq(groupOrderId: string): Promise<number> {
+  type ItemMeta = { boxesPerLayer?: unknown };
+
+  const go = await prisma.groupOrder.findUnique({
+    where: { id: groupOrderId },
+    include: {
+      items: { select: { productId: true, variantId: true, quantity: true, metadata: true } },
+      surfaces: { include: { layers: true } }
+    }
+  });
+  if (!go) return 0;
+
+  // New algorithm: calculate from surfaces/layers
+  if (go.surfaces && go.surfaces.length > 0) {
+    const totalBoxes = go.surfaces.reduce(
+      (sum, s) => sum + s.layers.reduce((ls, l) => ls + l.filledBoxes, 0),
+      0
+    );
+    const filledSurfaces = go.surfaces.filter(s => s.layers.some(l => l.filledBoxes > 0)).length;
+    const moqCurrent = filledSurfaces;
+
+    const productMap = new Map<string, { boxes: number; capacity: number }>();
+    for (const surface of go.surfaces) {
+      for (const layer of surface.layers) {
+        const key = `${layer.productId}:${layer.variantId ?? ''}`;
+        const existing = productMap.get(key);
+        if (existing) {
+          existing.boxes += layer.filledBoxes;
+          existing.capacity += layer.capacityBoxes;
+        } else {
+          productMap.set(key, { boxes: layer.filledBoxes, capacity: layer.capacityBoxes });
+        }
+      }
+    }
+
+    const productLayers = Array.from(productMap.entries()).map(([key, data]) => {
+      const [productId] = key.split(':');
+      const layerCount = go.surfaces.reduce(
+        (count, s) => count + s.layers.filter(l => `${l.productId}:${l.variantId ?? ''}` === key).length,
+        0
+      ) || 1;
+      const boxesPerLayer = data.capacity / layerCount;
+      return {
+        productId,
+        quantity: data.boxes,
+        boxesPerLayer: Math.floor(boxesPerLayer),
+        completedLayers: Math.floor(data.boxes / boxesPerLayer),
+        openedLayers: Math.ceil(data.boxes / boxesPerLayer)
+      };
+    });
+
+    const balancedLayers = productLayers.length === 0 ? 0 : Math.min(...productLayers.map(p => p.completedLayers));
+    const progressMeta = {
+      balancedLayers,
+      totalBoxes,
+      remainingToTarget: Math.max(0, go.moqTarget - moqCurrent),
+      productLayers
+    };
+
+    let newStatus: GroupOrderStatus = go.status as GroupOrderStatus;
+    if (go.status === 'OPEN' && moqCurrent >= go.moqTarget) newStatus = 'MOQ_REACHED';
+    else if (go.status === 'MOQ_REACHED' && moqCurrent < go.moqTarget) newStatus = 'OPEN';
+
+    await prisma.groupOrder.update({
+      where: { id: groupOrderId },
+      data: { moqCurrent, status: newStatus, meta: progressMeta as any }
+    });
+    return moqCurrent;
+  }
+
+  // Legacy fallback: calculate from items
+  const grouped = new Map<string, { productId: string; quantity: number; boxesPerLayer: number }>();
+  for (const item of go.items) {
+    const key = `${item.productId}:${item.variantId ?? ''}`;
+    const meta = ((item.metadata as ItemMeta | null) ?? {});
+    const bpl = Number(meta.boxesPerLayer ?? 1);
+    const boxesPerLayer = Number.isFinite(bpl) && bpl > 0 ? Math.floor(bpl) : 1;
+    const existing = grouped.get(key);
+    if (existing) existing.quantity += item.quantity;
+    else grouped.set(key, { productId: item.productId, quantity: item.quantity, boxesPerLayer });
+  }
+
+  const productLayers = Array.from(grouped.values()).map(entry => ({
+    productId: entry.productId,
+    quantity: entry.quantity,
+    boxesPerLayer: entry.boxesPerLayer,
+    completedLayers: Math.floor(entry.quantity / entry.boxesPerLayer),
+    openedLayers: Math.ceil(entry.quantity / entry.boxesPerLayer)
+  }));
+
+  const moqCurrent = productLayers.length <= 1
+    ? (productLayers[0]?.quantity ?? 0)
+    : productLayers.reduce(
+        (sum, p) => sum + Math.min(...productLayers.map(x => x.completedLayers)) * p.boxesPerLayer,
+        0
+      );
+
+  const balancedLayers = productLayers.length === 0 ? 0 : Math.min(...productLayers.map(p => p.completedLayers));
+  const totalBoxes = productLayers.reduce((sum, p) => sum + p.quantity, 0);
+  const progressMeta = {
+    balancedLayers,
+    totalBoxes,
+    remainingToTarget: Math.max(0, go.moqTarget - moqCurrent),
+    productLayers
+  };
+
+  let newStatus: GroupOrderStatus = go.status as GroupOrderStatus;
+  if (go.status === 'OPEN' && moqCurrent >= go.moqTarget) newStatus = 'MOQ_REACHED';
+  else if (go.status === 'MOQ_REACHED' && moqCurrent < go.moqTarget) newStatus = 'OPEN';
+
+  await prisma.groupOrder.update({
+    where: { id: groupOrderId },
+    data: { moqCurrent, status: newStatus, meta: progressMeta as any }
+  });
+  return moqCurrent;
 }

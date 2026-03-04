@@ -1,8 +1,12 @@
 /**
  * Group Order Allocation Algorithm - Pure Logic (Deterministic)
- * 
- * This module implements the strict client rules for group order allocation.
- * It is pure logic with no DB dependencies for easy testing.
+ *
+ * UNIT MODEL:
+ * - All tracking is in UNITS (the atomic unit).
+ * - filledBoxes is always derived: floor(filledUnits / unitsPerBox)
+ * - A layer is full when filledUnits >= capacityUnits
+ * - capacityUnits = boxesPerLayer * unitsPerBox
+ * - Partial layers are allowed — multiple participants fill a layer together.
  */
 
 import type {
@@ -16,235 +20,150 @@ import type {
 } from './types';
 import { validateProductLogistics } from './validation';
 
-/**
- * Main allocation function - implements all client rules
- */
 export function allocateToGroupOrder(
   input: AllocationInput,
   currentState: GroupOrderState
 ): AllocationResult {
-  // Validate product logistics
   const validationError = validateProductLogistics(input.product);
-  if (validationError) {
-    return {
-      success: false,
-      allocatedBoxes: 0,
-      allocatedUnits: 0,
-      surfacesOpened: 0,
-      layersOpened: 0,
-      surfacesUsed: [],
-      layersUsed: [],
-      error: validationError
-    };
-  }
+  if (validationError) return fail(validationError);
 
-  // CLIENT RULE 1: Validate manufacturer match
   const manufacturerError = validateManufacturer(input.product.manufacturer, currentState);
-  if (manufacturerError) {
-    return {
-      success: false,
-      allocatedBoxes: 0,
-      allocatedUnits: 0,
-      surfacesOpened: 0,
-      layersOpened: 0,
-      surfacesUsed: [],
-      layersUsed: [],
-      error: manufacturerError
-    };
-  }
+  if (manufacturerError) return fail(manufacturerError);
 
-  // Validate quantity
   if (input.quantityUnits <= 0) {
-    return {
-      success: false,
-      allocatedBoxes: 0,
-      allocatedUnits: 0,
-      surfacesOpened: 0,
-      layersOpened: 0,
-      surfacesUsed: [],
-      layersUsed: [],
-      error: {
-        code: 'INVALID_QUANTITY',
-        message: 'Quantity must be greater than 0',
-        details: { quantityUnits: input.quantityUnits }
-      }
-    };
+    return fail({
+      code: 'INVALID_QUANTITY',
+      message: 'Quantity must be greater than 0',
+      details: { quantityUnits: input.quantityUnits }
+    });
   }
 
-  // CLIENT RULE 4: Calculate surface_max_layers (min across all products)
   const newSurfaceMaxLayers = calculateSurfaceMaxLayers(input.product, currentState);
-  
-  // Check if adding this product would reduce surface_max_layers below already opened layers
   const layerConflictError = checkLayerLimitConflict(newSurfaceMaxLayers, currentState);
-  if (layerConflictError) {
-    return {
-      success: false,
-      allocatedBoxes: 0,
-      allocatedUnits: 0,
-      surfacesOpened: 0,
-      layersOpened: 0,
-      surfacesUsed: [],
-      layersUsed: [],
-      error: layerConflictError
-    };
-  }
+  if (layerConflictError) return fail(layerConflictError);
 
-  // Convert units to boxes (wholesale ordering - must order full boxes)
-  // ASSUMPTION: Wholesale requires full cartons, so we ceil to next box
-  const quantityBoxes = Math.ceil(input.quantityUnits / input.product.unitsPerBox);
-  const actualUnits = quantityBoxes * input.product.unitsPerBox;
-
-  // Perform allocation
-  const allocation = performAllocation(
-    input.product,
-    quantityBoxes,
-    actualUnits,
-    currentState,
-    newSurfaceMaxLayers
-  );
-
-  return allocation;
+  return performAllocation(input.product, input.quantityUnits, currentState, newSurfaceMaxLayers);
 }
 
-/**
- * CLIENT RULE 1: Validate manufacturer match
- */
-/**
- * Normalize a manufacturer name for fuzzy comparison.
- * Strips punctuation (apostrophes, dots, dashes), collapses whitespace, lowercases.
- * e.g. "קאמפו ד'אורו אס אר אל" and "קאמפו דאורו אס.אר.אל." both become "קאמפו דאורו אס אר אל"
- */
+function fail(error: AllocationError): AllocationResult {
+  return {
+    success: false,
+    allocatedBoxes: 0,
+    allocatedUnits: 0,
+    surfacesOpened: 0,
+    layersOpened: 0,
+    surfacesUsed: [],
+    layersUsed: [],
+    error
+  };
+}
+
+// ── Manufacturer validation ──────────────────────────────────────────────────
+
 function normalizeManufacturer(name: string): string {
   return name
-    .replace(/['\u2019\u0060\u00B4]/g, '')  // strip apostrophes
-    .replace(/\./g, ' ')                     // dots become spaces (handles אס.אר.אל. → אס אר אל)
-    .replace(/[,"\-_]/g, '')                 // strip other punctuation
-    .replace(/\s+/g, ' ')                    // collapse whitespace
+    .replace(/['\u2019\u0060\u00B4]/g, '')
+    .replace(/\./g, ' ')
+    .replace(/[,"\-_]/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 }
 
-function validateManufacturer(
-  productManufacturer: string,
-  state: GroupOrderState
-): AllocationError | null {
-  if (state.manufacturerId) {
-    const normalizedGroup = normalizeManufacturer(state.manufacturerId);
-    const normalizedProduct = normalizeManufacturer(productManufacturer);
-    if (normalizedGroup !== normalizedProduct) {
-      return {
-        code: 'MANUFACTURER_MISMATCH',
-        message: `Group order is locked to manufacturer "${state.manufacturerId}"`,
-        details: {
-          groupOrderManufacturer: state.manufacturerId,
-          productManufacturer
-        }
-      };
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i;
+    for (let j = 1; j <= b.length; j++) {
+      const val = a[i - 1] === b[j - 1] ? dp[j - 1] : Math.min(dp[j - 1], dp[j], prev) + 1;
+      dp[j - 1] = prev;
+      prev = val;
     }
+    dp[b.length] = prev;
   }
-  return null;
+  return dp[b.length];
 }
 
-/**
- * CLIENT RULE 4: Calculate surface_max_layers = MIN(layers_per_surface) across all products
- */
-function calculateSurfaceMaxLayers(
-  newProduct: ProductLogistics,
-  state: GroupOrderState
-): number {
-  if (state.surfaceMaxLayers === null) {
-    // First product sets the initial limit
-    return newProduct.layersPerSurface;
-  }
-
-  // Return minimum of current limit and new product's layers_per_surface
-  return Math.min(state.surfaceMaxLayers, newProduct.layersPerSurface);
+function validateManufacturer(productManufacturer: string, state: GroupOrderState): AllocationError | null {
+  if (!state.manufacturerId) return null;
+  const a = normalizeManufacturer(state.manufacturerId);
+  const b = normalizeManufacturer(productManufacturer);
+  if (a === b) return null;
+  const maxDist = a.length > 20 ? 3 : 2;
+  if (editDistance(a, b) <= maxDist) return null;
+  return {
+    code: 'MANUFACTURER_MISMATCH',
+    message: `Group order is locked to manufacturer "${state.manufacturerId}"`,
+    details: { groupOrderManufacturer: state.manufacturerId, productManufacturer }
+  };
 }
 
-/**
- * Check if new surface_max_layers would conflict with already opened layers
- */
-function checkLayerLimitConflict(
-  newSurfaceMaxLayers: number,
-  state: GroupOrderState
-): AllocationError | null {
+// ── Layer limit rules ────────────────────────────────────────────────────────
+
+function calculateSurfaceMaxLayers(product: ProductLogistics, state: GroupOrderState): number {
+  return state.surfaceMaxLayers === null
+    ? product.layersPerSurface
+    : Math.min(state.surfaceMaxLayers, product.layersPerSurface);
+}
+
+function checkLayerLimitConflict(newMax: number, state: GroupOrderState): AllocationError | null {
   for (const surface of state.surfaces) {
-    const openedLayers = surface.layers.length;
-    if (openedLayers > newSurfaceMaxLayers) {
+    if (surface.layers.length > newMax) {
       return {
         code: 'LAYER_LIMIT_CONFLICT',
-        message: `Cannot add product because it reduces allowed layers per surface (${newSurfaceMaxLayers}) below currently opened layers (${openedLayers})`,
-        details: {
-          newSurfaceMaxLayers,
-          surfaceIndex: surface.surfaceIndex,
-          openedLayers,
-          currentSurfaceMaxLayers: state.surfaceMaxLayers
-        }
+        message: `Cannot add product — it reduces allowed layers per surface (${newMax}) below currently opened layers (${surface.layers.length})`,
+        details: { newSurfaceMaxLayers: newMax, surfaceIndex: surface.surfaceIndex, openedLayers: surface.layers.length }
       };
     }
   }
   return null;
 }
 
-/**
- * Perform the actual allocation across surfaces and layers
- */
+// ── Core allocation ──────────────────────────────────────────────────────────
+
 function performAllocation(
   product: ProductLogistics,
-  quantityBoxes: number,
-  quantityUnits: number,
+  requestedUnits: number,
   state: GroupOrderState,
   surfaceMaxLayers: number
 ): AllocationResult {
-  let remainingBoxes = quantityBoxes;
-  let remainingUnits = quantityUnits;
+  const capacityUnitsPerLayer = product.boxesPerLayer * product.unitsPerBox;
+  let remainingUnits = requestedUnits;
+
   const surfacesUsed = new Set<number>();
   const layersUsed: Array<{ surfaceIndex: number; layerIndex: number; boxes: number; units: number }> = [];
   let newSurfacesOpened = 0;
   let newLayersOpened = 0;
 
-  // CLIENT RULE 5: Fill existing open layers for the SAME product first
+  // RULE: Fill existing open layers for the SAME product first
   for (const surface of state.surfaces) {
-    if (remainingBoxes === 0) break;
-
+    if (remainingUnits <= 0) break;
     for (const layer of surface.layers) {
-      if (remainingBoxes === 0) break;
+      if (remainingUnits <= 0) break;
+      if (layer.productId !== product.productId || layer.variantId !== (product.variantId ?? null)) continue;
+      if (layer.status !== 'open') continue;
 
-      // Only fill layers with the same product
-      if (layer.productId !== product.productId || layer.variantId !== (product.variantId ?? null)) {
-        continue;
-      }
+      const availableUnits = layer.capacityUnits - layer.filledUnits;
+      if (availableUnits <= 0) continue;
 
-      // Only fill open layers (not full)
-      if (layer.status !== 'open') {
-        continue;
-      }
-
-      const availableBoxes = layer.capacityBoxes - layer.filledBoxes;
-      if (availableBoxes <= 0) {
-        continue;
-      }
-
-      const boxesToAdd = Math.min(remainingBoxes, availableBoxes);
-      const unitsToAdd = boxesToAdd * product.unitsPerBox;
-
-      remainingBoxes -= boxesToAdd;
+      const unitsToAdd = Math.min(remainingUnits, availableUnits);
       remainingUnits -= unitsToAdd;
       surfacesUsed.add(surface.surfaceIndex);
       layersUsed.push({
         surfaceIndex: surface.surfaceIndex,
         layerIndex: layer.layerIndex,
-        boxes: boxesToAdd,
+        boxes: Math.floor(unitsToAdd / product.unitsPerBox),
         units: unitsToAdd
       });
     }
   }
 
-  // If still have remaining quantity, need to open new layers
-  while (remainingBoxes > 0) {
-    // Find a surface with available layer slots
+  // Open new layers as needed
+  while (remainingUnits > 0) {
     let targetSurface: SurfaceState | null = null;
-
     for (const surface of state.surfaces) {
       if (surface.layers.length < surfaceMaxLayers && surface.status === 'open') {
         targetSurface = surface;
@@ -252,64 +171,43 @@ function performAllocation(
       }
     }
 
-    // If no surface has available slots, need to open a new surface
     if (!targetSurface) {
-      const nextSurfaceIndex = state.surfaces.length;
-
-      // Check if we can open a new surface
-      if (!state.allowExtraSurfaces && nextSurfaceIndex >= state.moqSurfaces) {
-        // Cannot open more surfaces - overflow error
+      const nextIdx = state.surfaces.length;
+      if (!state.allowExtraSurfaces && nextIdx >= state.moqSurfaces) {
         return {
           success: false,
-          allocatedBoxes: quantityBoxes - remainingBoxes,
-          allocatedUnits: quantityUnits - remainingUnits,
+          allocatedBoxes: Math.floor((requestedUnits - remainingUnits) / product.unitsPerBox),
+          allocatedUnits: requestedUnits - remainingUnits,
           surfacesOpened: newSurfacesOpened,
           layersOpened: newLayersOpened,
           surfacesUsed: Array.from(surfacesUsed),
           layersUsed,
           error: {
             code: 'OVERFLOW',
-            message: `Cannot allocate ${remainingBoxes} more boxes - would exceed MOQ surfaces limit (${state.moqSurfaces})`,
-            details: {
-              moqSurfaces: state.moqSurfaces,
-              surfaceMaxLayers,
-              currentSurfaces: state.surfaces.length,
-              requestedBoxes: quantityBoxes,
-              allocatedBoxes: quantityBoxes - remainingBoxes,
-              remainingBoxes,
-              allowExtraSurfaces: state.allowExtraSurfaces
-            }
+            message: `Cannot allocate ${remainingUnits} more units — would exceed MOQ surfaces limit (${state.moqSurfaces})`,
+            details: { moqSurfaces: state.moqSurfaces, surfaceMaxLayers, currentSurfaces: state.surfaces.length, allowExtraSurfaces: state.allowExtraSurfaces }
           }
         };
       }
-
-      if (nextSurfaceIndex >= state.maxSurfacesLimit) {
+      if (nextIdx >= state.maxSurfacesLimit) {
         return {
           success: false,
-          allocatedBoxes: quantityBoxes - remainingBoxes,
-          allocatedUnits: quantityUnits - remainingUnits,
+          allocatedBoxes: Math.floor((requestedUnits - remainingUnits) / product.unitsPerBox),
+          allocatedUnits: requestedUnits - remainingUnits,
           surfacesOpened: newSurfacesOpened,
           layersOpened: newLayersOpened,
           surfacesUsed: Array.from(surfacesUsed),
           layersUsed,
           error: {
             code: 'OVERFLOW',
-            message: `Cannot allocate ${remainingBoxes} more boxes - would exceed maximum surfaces limit (${state.maxSurfacesLimit})`,
-            details: {
-              maxSurfacesLimit: state.maxSurfacesLimit,
-              currentSurfaces: state.surfaces.length,
-              requestedBoxes: quantityBoxes,
-              allocatedBoxes: quantityBoxes - remainingBoxes,
-              remainingBoxes
-            }
+            message: `Cannot allocate — would exceed maximum surfaces limit (${state.maxSurfacesLimit})`,
+            details: { maxSurfacesLimit: state.maxSurfacesLimit, currentSurfaces: state.surfaces.length }
           }
         };
       }
-
-      // Create a virtual new surface for allocation calculation
       targetSurface = {
-        id: `virtual_surface_${nextSurfaceIndex}`,
-        surfaceIndex: nextSurfaceIndex,
+        id: `virtual_surface_${nextIdx}`,
+        surfaceIndex: nextIdx,
         maxLayers: surfaceMaxLayers,
         status: 'open',
         layers: []
@@ -318,10 +216,9 @@ function performAllocation(
       newSurfacesOpened++;
     }
 
-    // Open a new layer on the target surface
     const nextLayerIndex = targetSurface.layers.length;
-    const boxesToAdd = Math.min(remainingBoxes, product.boxesPerLayer);
-    const unitsToAdd = boxesToAdd * product.unitsPerBox;
+    const unitsToAdd = Math.min(remainingUnits, capacityUnitsPerLayer);
+    const boxesInLayer = Math.floor(unitsToAdd / product.unitsPerBox);
 
     const newLayer: LayerState = {
       id: `virtual_layer_${targetSurface.surfaceIndex}_${nextLayerIndex}`,
@@ -329,29 +226,29 @@ function performAllocation(
       productId: product.productId,
       variantId: product.variantId ?? null,
       capacityBoxes: product.boxesPerLayer,
-      capacityUnits: product.boxesPerLayer * product.unitsPerBox,
-      filledBoxes: boxesToAdd,
+      capacityUnits: capacityUnitsPerLayer,
+      filledBoxes: boxesInLayer,
       filledUnits: unitsToAdd,
-      status: boxesToAdd >= product.boxesPerLayer ? 'full' : 'open'
+      status: unitsToAdd >= capacityUnitsPerLayer ? 'full' : 'open'
     };
 
     targetSurface.layers.push(newLayer);
-    remainingBoxes -= boxesToAdd;
     remainingUnits -= unitsToAdd;
     surfacesUsed.add(targetSurface.surfaceIndex);
     layersUsed.push({
       surfaceIndex: targetSurface.surfaceIndex,
       layerIndex: nextLayerIndex,
-      boxes: boxesToAdd,
+      boxes: boxesInLayer,
       units: unitsToAdd
     });
     newLayersOpened++;
   }
 
+  const allocatedUnits = requestedUnits - remainingUnits;
   return {
     success: true,
-    allocatedBoxes: quantityBoxes,
-    allocatedUnits: quantityUnits,
+    allocatedBoxes: Math.floor(allocatedUnits / product.unitsPerBox),
+    allocatedUnits,
     surfacesOpened: newSurfacesOpened,
     layersOpened: newLayersOpened,
     surfacesUsed: Array.from(surfacesUsed),

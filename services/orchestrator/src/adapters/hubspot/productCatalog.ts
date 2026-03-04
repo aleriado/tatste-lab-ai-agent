@@ -133,6 +133,31 @@ async function getDescriptionPropertyNames(): Promise<DescriptionPropertyNames> 
   return cachedDescriptionProps;
 }
 
+function parseHubSpotImageUrl(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const s = raw.trim();
+  // hs_images returns a JSON array: [{"url":"https://...","type":"..."}]
+  if (s.startsWith('[')) {
+    try {
+      const arr = JSON.parse(s) as Array<{ url?: string }>;
+      const first = arr[0]?.url;
+      if (first) return first.trim();
+    } catch {
+      // fall through to plain URL
+    }
+  }
+  // Plain URL or single JSON object
+  if (s.startsWith('{')) {
+    try {
+      const obj = JSON.parse(s) as { url?: string };
+      if (obj.url) return obj.url.trim();
+    } catch {
+      // fall through
+    }
+  }
+  return s || undefined;
+}
+
 function getFirstFromProps(p: Record<string, string | null | undefined>, keys: string[]): string | undefined {
   for (const k of keys) {
     const v = p[k];
@@ -147,58 +172,43 @@ function getFirstFromProps(p: Record<string, string | null | undefined>, keys: s
 const PRODUCT_PROPERTIES = [
   'name',
   'description',
+  'hs_rich_text_description',
   'short_description',
   'detailed_description',
-  'full_description',
-  'long_description',
   'hs_sku',
-  'sku',
-  'woo_product_id',
-  'wc_product_id',
-  'woocommerce_id',
-  'external_product_id',
-  'store_product_id',
+  'hs_images',
+  'hs_cost_of_goods_sold',
+  'hs_status',
   'price',
-  'hs_price',
-  'manufacturer_id',
-  'manufacturer_name',
+  'mhyr_qmwny_lyhydh_retail_unit_price',
+  'n2_mhyr_ybwn_qbwzty_group_import_pricing__per_carton',
+  'n3_mhyr_sytwny_wholesale_pricing__per_carton',
+  'n4_mhyr_ybwn_lmsth_ml_full_pallet_import_pricing',
   'yzrn__spq_producer__supplier',
-  'brand',
-  'brand_id',
   'mwtg_brand',
-  'units_per_box',
-  'units_in_box',
-  'units_per_carton',
+  'rz_mqwr_country_of_origin',
   'mspr_yhydwt_bqrtwn',
-  'boxes_per_layer',
-  'box_per_layer',
-  'cartons_per_layer',
-  'units_per_layer',
   'mspr_qrtwnym_bskbh',
-  'layers_per_surface',
-  'number_of_layers_per_surface',
-  'layers_per_pallet',
   'mspr_qrtwnym_bmsth',
-  'boxes_per_surface',
-  'boxes_per_pallet',
-  'cartons_per_surface',
-  'weight',
+  'store_product_id',
+  'product_source_store',
   'barcode',
   'ean',
   'ean13',
-  'upc',
-  'gtin',
-  'hs_product_type',
-  'product_type',
-  'type_label',
-  'image_url',
-  'product_image_url',
-  'url',
-  'product_url',
+  'weight',
   'category',
   'categories',
   'in_stock',
-  'stock_status'
+  'stock_status',
+  'inventory',
+  'stock_quantity',
+  'url',
+  'product_url',
+  'sale_price',
+  'is_downloadable',
+  'download_link',
+  'sub_category',
+  'tags'
 ];
 
 function mapHubSpotToWooProduct(
@@ -206,56 +216,56 @@ function mapHubSpotToWooProduct(
   descriptionProps?: { short: string[]; detailed: string[] }
 ): WooProduct {
   const p = raw.properties ?? {};
-  const wooProductId = firstNonEmpty([
-    p.store_product_id,
-    p.woo_product_id,
-    p.wc_product_id,
-    p.woocommerce_id,
-    p.external_product_id
-  ]);
-  const sku = firstNonEmpty([p.hs_sku, p.sku]);
-  const productId = firstNonEmpty([wooProductId, sku, raw.id]) as string;
 
+  // Product ID: always use HubSpot's native object ID as the canonical identifier
+  const productId = raw.id;
+
+  // SKU from hs_sku
+  const sku = firstNonEmpty([p.hs_sku, p.sku]);
+
+  // Manufacturer (יצרן / ספק) — primary from yzrn__spq_producer__supplier
   const manufacturer = firstNonEmpty([
-    p.manufacturer_name,
-    p.manufacturer,
     p.yzrn__spq_producer__supplier,
-    p.brand,
-    p.mwtg_brand
+    p.manufacturer_name,
+    p.manufacturer
   ]);
+
+  // Brand (מותג) — from mwtg_brand
+  const brand = firstNonEmpty([p.mwtg_brand, p.brand]);
+
+  // Country of origin (ארץ מקור)
+  const countryOfOrigin = firstNonEmpty([p.rz_mqwr_country_of_origin]);
+
+  // Logistics fields
   const unitsPerBox = toPositiveInt(
-    firstNonEmpty([p.units_per_box, p.units_in_box, p.units_per_carton, p.mspr_yhydwt_bqrtwn])
+    firstNonEmpty([p.mspr_yhydwt_bqrtwn, p.units_per_box, p.units_in_box, p.units_per_carton])
   );
   const boxesPerLayer = toPositiveInt(
-    firstNonEmpty([
-      p.boxes_per_layer,
-      p.box_per_layer,
-      p.cartons_per_layer,
-      p.units_per_layer,
-      p.mspr_qrtwnym_bskbh
-    ])
+    firstNonEmpty([p.mspr_qrtwnym_bskbh, p.boxes_per_layer, p.cartons_per_layer])
   );
   const layersPerSurface = toPositiveInt(
-    firstNonEmpty([
-      p.layers_per_surface,
-      p.number_of_layers_per_surface,
-      p.layers_per_pallet,
-      p.mspr_qrtwnym_bmsth
-    ])
+    firstNonEmpty([p.mspr_qrtwnym_bmsth, p.layers_per_surface, p.layers_per_pallet])
   );
   let boxesPerSurface = toPositiveInt(
-    firstNonEmpty([p.boxes_per_surface, p.boxes_per_pallet, p.cartons_per_surface])
+    firstNonEmpty([p.boxes_per_surface, p.boxes_per_pallet])
   );
   if (!boxesPerSurface && boxesPerLayer && layersPerSurface) {
     boxesPerSurface = boxesPerLayer * layersPerSurface;
   }
-  const barcode = firstNonEmpty([p.barcode, p.ean, p.ean13, p.upc, p.gtin]);
-  const costPrice = firstNonEmpty([p.cost_price, p.cost]);
-  const importPricePerSurface = firstNonEmpty([p.import_price_per_surface, p.import_price_surface]);
-  const importPricePer2Boxes = firstNonEmpty([p.import_price_per_2_boxes, p.import_price_2boxes]);
-  const wholesalePrice = firstNonEmpty([p.wholesale_price, p.stock_price]);
+
+  // Pricing — use HubSpot's actual field names directly
+  const costPrice = firstNonEmpty([p.hs_cost_of_goods_sold, p.cost_price, p.cost]);
+  const importPricePerSurface = firstNonEmpty([p.n4_mhyr_ybwn_lmsth_ml_full_pallet_import_pricing]);
+  const importPricePer2Boxes = firstNonEmpty([p.n2_mhyr_ybwn_qbwzty_group_import_pricing__per_carton]);
+  const wholesalePrice = firstNonEmpty([p.n3_mhyr_sytwny_wholesale_pricing__per_carton]);
+  const retailPrice = firstNonEmpty([p.mhyr_qmwny_lyhydh_retail_unit_price, p.price]);
   const salePrice = firstNonEmpty([p.sale_price, p.on_sale_price]);
-  const status = firstNonEmpty([p.status]);
+
+  // Image — use hs_images (HubSpot's image field, may be JSON array)
+  const imageUrl = parseHubSpotImageUrl(p.hs_images) ?? firstNonEmpty([p.image_url, p.product_image_url]);
+
+  const barcode = firstNonEmpty([p.barcode, p.ean, p.ean13, p.upc, p.gtin]);
+  const status = firstNonEmpty([p.hs_status, p.status]);
   const isDownloadableRaw = firstNonEmpty([p.is_downloadable, p.downloadable]);
   const isDownloadable = isDownloadableRaw != null
     ? ['1', 'true', 'yes'].includes(isDownloadableRaw.toLowerCase())
@@ -267,23 +277,24 @@ function mapHubSpotToWooProduct(
   const inventoryRaw = firstNonEmpty([p.inventory, p.stock_quantity]);
   const inventory = inventoryRaw != null ? parseInt(inventoryRaw, 10) || undefined : undefined;
 
-  const imageUrl = firstNonEmpty([p.image_url, p.product_image_url]);
   const permalink = firstNonEmpty([p.url, p.product_url]);
 
-  let shortDescription: string | undefined;
-  let detailedDescription: string | undefined;
-  if (descriptionProps) {
-    shortDescription = getFirstFromProps(p, descriptionProps.short);
-    detailedDescription = getFirstFromProps(p, descriptionProps.detailed);
-  }
-  shortDescription ??= firstNonEmpty([p.short_description]);
-  detailedDescription ??= firstNonEmpty([
-    p.detailed_description,
-    p.full_description,
-    p.long_description,
-    p.description
-  ]);
-  const description = firstNonEmpty([p.description]) ?? shortDescription ?? detailedDescription;
+  // Descriptions
+  // shortDescription = plain text description (used in card preview)
+  // detailedDescription = hs_rich_text_description (used in modal, may contain HTML)
+  // We always prefer the explicit HubSpot fields directly, then fall back to dynamic lookup
+  const shortDescription: string | undefined =
+    firstNonEmpty([p.description]) ??
+    (descriptionProps ? getFirstFromProps(p, descriptionProps.short) : undefined) ??
+    firstNonEmpty([p.short_description]);
+
+  const detailedDescription: string | undefined =
+    firstNonEmpty([p.hs_rich_text_description]) ??
+    firstNonEmpty([p.detailed_description]) ??
+    (descriptionProps ? getFirstFromProps(p, descriptionProps.detailed) : undefined) ??
+    shortDescription;
+
+  const description = shortDescription ?? detailedDescription;
 
   const stockStatus = firstNonEmpty([p.stock_status])?.toLowerCase();
   const inStockRaw = firstNonEmpty([p.in_stock]);
@@ -297,7 +308,7 @@ function mapHubSpotToWooProduct(
   return {
     id: productId,
     name: normalizeDisplayName(firstNonEmpty([p.name])) ?? `HubSpot Product ${raw.id}`,
-    price: firstNonEmpty([p.hs_price, p.price]),
+    price: retailPrice,
     permalink,
     description,
     shortDescription,
@@ -310,17 +321,20 @@ function mapHubSpotToWooProduct(
     inventory,
     purchasable: true,
     weight: firstNonEmpty([p.weight]),
-    barcode,
+    sku,
+    barcode: barcode ?? sku,
     costPrice,
     importPricePerSurface,
     importPricePer2Boxes,
     wholesalePrice,
-    retailPrice: firstNonEmpty([p.hs_price, p.price]),
+    retailPrice,
     salePrice,
     status,
     isDownloadable,
     downloadLink,
     manufacturer,
+    brand,
+    countryOfOrigin,
     tags,
     unitsPerBox,
     layersPerSurface,
@@ -329,9 +343,8 @@ function mapHubSpotToWooProduct(
     metadata: {
       source: 'hubspot',
       hubspotProductId: raw.id,
-      wooProductId,
       sku,
-      barcode,
+      barcode: barcode ?? sku,
       costPrice,
       importPricePerSurface,
       importPricePer2Boxes,
@@ -341,6 +354,8 @@ function mapHubSpotToWooProduct(
       layersPerSurface,
       boxesPerSurface,
       manufacturer,
+      brand,
+      countryOfOrigin,
       boxesPerLayer
     }
   };

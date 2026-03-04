@@ -494,6 +494,85 @@ body {
   margin-top: 0.2rem;
 }
 
+.group-order-participant-costs {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: rgba(16, 185, 129, 0.07);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 0.5rem;
+}
+
+.group-order-participant-costs-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #10b981;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.group-order-participant-cost-row {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.group-order-participant-cost-row:last-of-type {
+  border-bottom: none;
+}
+
+.group-order-participant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.group-order-participant-label {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.group-order-participant-amount {
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.group-order-participant-product-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.group-order-participant-product-name {
+  color: #94a3b8;
+  flex: 1 1;
+  margin-right: 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-order-participant-product-detail {
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.group-order-participant-cost-total {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(16, 185, 129, 0.2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #10b981;
+  text-align: right;
+}
+
 .group-order-meta-row {
   margin-top: 0.35rem;
   font-size: 0.72rem;
@@ -548,6 +627,17 @@ body {
   display: inline-block;
   margin: 0 0.25rem;
   color: #64748b;
+}
+
+.group-order-layer-price {
+  color: #10b981;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.group-order-layer-price-total {
+  color: #94a3b8;
+  font-weight: 400;
 }
 
 /* ── Footer ── */

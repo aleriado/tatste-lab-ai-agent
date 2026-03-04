@@ -41,6 +41,9 @@ function wooToCard(p: WooProduct): ProductCard {
     inStock: p.inStock,
     inventory: p.inventory,
     manufacturer: p.manufacturer ?? (p.metadata?.manufacturer as string | undefined),
+    brand: p.brand ?? (p.metadata?.brand as string | undefined),
+    countryOfOrigin: p.countryOfOrigin ?? (p.metadata?.countryOfOrigin as string | undefined),
+    sku: p.sku ?? (p.metadata?.sku as string | undefined),
     tags: p.tags ?? (p.metadata?.tags as string[] | undefined),
     weight: p.weight ?? (p.metadata?.weight as string | undefined),
     barcode: p.barcode ?? (p.metadata?.barcode as string | undefined),
@@ -165,11 +168,11 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
           collectedCart = data.cart ?? data;
         }
 
-        // Collect checkout link
-        if (fnName === 'checkout_begin' && data?.paymentUrl) {
+        // Collect checkout link (regular or group order)
+        if ((fnName === 'checkout_begin' || fnName === 'group_checkout') && data?.paymentUrl) {
           collectedLink = {
             url: data.paymentUrl,
-            label: 'Complete Payment',
+            label: fnName === 'group_checkout' ? `Pay my share — ₪${data.yourTotal}` : 'Complete Payment',
             amountDueNow: data.amountDueNow?.toFixed(2),
             amountDueLater: data.amountDueLater?.toFixed(2)
           };
@@ -188,7 +191,8 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
             participantCount: data.participantCount,
             expiresAt: data.expiresAt ?? undefined,
             progress: data.progress ?? undefined,
-            surfaces: data.surfaces ?? undefined
+            surfaces: data.surfaces ?? undefined,
+            participantCosts: data.participantCosts ?? undefined
           };
         }
 
@@ -217,7 +221,9 @@ function generateSuggestions(cards: ProductCard[], cart?: CartSnapshot): string[
   const suggestions: string[] = [];
 
   for (const card of cards) {
-    suggestions.push(`Add ${card.name} to cart [productId:${card.id}]`);
+    // Do NOT embed productId tags — they become stale in conversation history
+    // and cause the AI to use outdated IDs instead of calling product_search first
+    suggestions.push(`Add ${card.name} to cart`);
   }
 
   if (cart && cart.items.length > 0) {

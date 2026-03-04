@@ -35,6 +35,8 @@ export interface WooProduct {
   upsellIds?: number[];
   purchasable?: boolean;
   weight?: string;
+  /** SKU / barcode (ברקוד) */
+  sku?: string;
   barcode?: string;
   /** Cost price in ILS (מחיר עלות בארץ) */
   costPrice?: string;
@@ -54,8 +56,12 @@ export interface WooProduct {
   isDownloadable?: boolean;
   /** Download link if downloadable (קישור להורדה) */
   downloadLink?: string;
-  /** Manufacturer name (יצרן) */
+  /** Manufacturer name (יצרן / ספק) */
   manufacturer?: string;
+  /** Brand name (מותג) */
+  brand?: string;
+  /** Country of origin (ארץ מקור) */
+  countryOfOrigin?: string;
   tags?: string[];
   /** Units per box (יחידות בקרטון) */
   unitsPerBox?: number;

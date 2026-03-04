@@ -106,6 +106,19 @@ export default function GroupOrderStatus({ groupOrder, t }: Props) {
                           <span>
                             Capacity: {layer.capacityBoxes} box{layer.capacityBoxes !== 1 ? 'es' : ''}
                           </span>
+                          {layer.unitPrice && (
+                            <>
+                              <span className="group-order-layer-dot">•</span>
+                              <span className="group-order-layer-price">
+                                ₪{layer.unitPrice}/unit
+                                {layer.capacityUnits > 0 && (
+                                  <span className="group-order-layer-price-total">
+                                    {' '}(₪{(parseFloat(layer.unitPrice) * layer.capacityUnits).toFixed(2)} full layer)
+                                  </span>
+                                )}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -142,6 +155,33 @@ export default function GroupOrderStatus({ groupOrder, t }: Props) {
       {groupOrder.expiresAt && (
         <div className="group-order-deadline">
           {t.expires}: {new Date(groupOrder.expiresAt).toLocaleString()}
+        </div>
+      )}
+
+      {groupOrder.participantCosts && groupOrder.participantCosts.length > 0 && (
+        <div className="group-order-participant-costs">
+          <div className="group-order-participant-costs-title">Cost per Participant</div>
+          {groupOrder.participantCosts.map((p, idx) => (
+            <div key={p.customerId} className="group-order-participant-cost-row">
+              <div className="group-order-participant-header">
+                <span className="group-order-participant-label">{p.customerId}</span>
+                <span className="group-order-participant-amount">₪{p.total}</span>
+              </div>
+              {p.products.map((prod) => (
+                <div key={prod.name} className="group-order-participant-product-row">
+                  <span className="group-order-participant-product-name">{prod.name}</span>
+                  <span className="group-order-participant-product-detail">
+                    {prod.units} units · ₪{prod.cost}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+          <div className="group-order-participant-cost-total">
+            Total: ₪{groupOrder.participantCosts
+              .reduce((sum, p) => sum + parseFloat(p.total), 0)
+              .toFixed(2)}
+          </div>
         </div>
       )}
     </div>
