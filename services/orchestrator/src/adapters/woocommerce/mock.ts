@@ -149,7 +149,7 @@ export const mockWooAdapter: WooCommerceAdapter = {
     return [];
   },
 
-  async getRelatedProducts(productId: string): Promise<WooProduct[]> {
+  async getRelatedProducts(productId: string, _options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]> {
     const relatedIds = CROSS_SELL_MAP[productId] ?? [];
     return MOCK_PRODUCTS.filter((p) => relatedIds.includes(p.id));
   }

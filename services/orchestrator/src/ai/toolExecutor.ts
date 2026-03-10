@@ -16,14 +16,36 @@ import {
   listDiscoverableGroupOrders,
   findBestGroupOrdersForManufacturer,
   deleteGroupOrderByCreator,
-  addItemToGroupOrder
+  addItemToGroupOrder,
+  createImportOrder,
+  getOpenImportOrders,
+  addItemToImportOrder,
+  checkoutImportOrder,
 } from '@taste-labs/db';
 import type { ProductLogistics } from '@taste-labs/db/src/groupOrder/types';
-import { getPaymentAdapter } from '../adapters/payment';import { logInfo, logError } from '../logger';
+import type { SessionContext } from '@taste-labs/shared';
+import { getPaymentAdapter } from '../adapters/payment';
+import { getAvailableOrderTypes } from './orderTypeRouter';
+import { stripPricesForCatalogExtension } from './interventionGates';
+import { logInfo, logError } from '../logger';
 
 export interface ToolContext {
   customerId: string;
   traceId: string;
+  sessionContext?: SessionContext;
+}
+
+function buildDefaultSessionContext(customerId: string): SessionContext {
+  return {
+    sessionId: '',
+    customerId,
+    userType: 'private_consumer',
+    currentPage: 'catalog',
+    shareSuggestionsCount: 0,
+    shareSuggestionsPerPage: {},
+    activeGroupOrders: [],
+    activeImportOrders: [],
+  };
 }
 
 export interface ToolResult {
@@ -113,7 +135,9 @@ export async function executeTool(
     }
 
     case 'suggest_complements': {
-      const related = await woo.getRelatedProducts(args.productId as string);
+      const productId = args.productId as string;
+      const sameManufacturerOnly = args.sameManufacturerOnly === true;
+      const related = await woo.getRelatedProducts(productId, { sameManufacturerOnly });
       return { data: related, products: related };
     }
 
@@ -121,59 +145,72 @@ export async function executeTool(
     case 'cart_add_item': {
       const productId = args.productId as string;
       const variantId = (args.variantId as string) ?? null;
+      const orderType = (args.orderType as 'regular' | 'stock') ?? 'regular';
 
-      // Force quantity to 1 — the AI sometimes hallucinates quantity > 1.
-      // If the user truly wants more, they can click again or say "add 3".
-      // The DB layer increments existing items, so repeated adds still stack.
-      const quantity = 1;
+      const requested = typeof args.quantity === 'number' && Number.isInteger(args.quantity) && args.quantity > 0
+        ? Math.min(args.quantity, 9999)
+        : 1;
+      const quantity = requested;
 
-      logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, ai_requested_qty=${args.quantity}`, { traceId: ctx.traceId });
+      logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, orderType=${orderType}, ai_requested_qty=${args.quantity}`, { traceId: ctx.traceId });
 
-      // Fetch product info from Woo to get name/price/image
       const product = await woo.getProduct(productId);
       if (!product) return { data: { error: `Product ${productId} not found in catalog` } };
 
-      // Validate purchasable & price before adding
       if (product.purchasable === false) {
         return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
-      }
-      const unitPrice = parseFloat(product.price ?? '');
-      if (!product.price || product.price.trim() === '' || isNaN(unitPrice) || unitPrice <= 0) {
-        return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added to cart.` } };
       }
       if (product.inStock === false) {
         return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
       }
 
+      // Use unitPrice from args (from get_order_type_options); fallback to product price by order type
+      let unitPrice: number;
+      if (typeof args.unitPrice === 'number' && !isNaN(args.unitPrice) && args.unitPrice > 0) {
+        unitPrice = args.unitPrice;
+      } else {
+        const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+        const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+        unitPrice = orderType === 'stock' && !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+      }
+      if (isNaN(unitPrice) || unitPrice <= 0) {
+        return { data: { error: `Sorry, "${product.name}" doesn't have a price set for ${orderType} and can't be added to cart.` } };
+      }
+
       const cart = await addCartItem(ctx.customerId, {
         productId,
         variantId,
+        orderType,
         name: product.name,
         imageUrl: product.images?.[0]?.src ?? null,
         unitPrice,
-        quantity
+        quantity,
       });
 
       const summary = computeCartSummary(cart);
-      return { data: { message: `Added ${quantity}x ${product.name} to cart`, cart: summary } };
+      return { data: { message: `Added ${quantity}x ${product.name} (${orderType}) to cart`, cart: summary } };
     }
 
     case 'cart_remove_item': {
+      const orderType = args.orderType as 'regular' | 'stock' | undefined;
       const cart = await removeCartItem(
         ctx.customerId,
         args.productId as string,
-        (args.variantId as string) ?? null
+        (args.variantId as string) ?? null,
+        orderType
       );
       const summary = computeCartSummary(cart);
       return { data: { message: 'Item removed from cart', cart: summary } };
     }
 
     case 'cart_update_quantity': {
+      const orderType = args.orderType as 'regular' | 'stock' | undefined;
       const cart = await updateCartItemQty(
         ctx.customerId,
         args.productId as string,
         args.quantity as number,
-        (args.variantId as string) ?? null
+        (args.variantId as string) ?? null,
+        orderType
       );
       const summary = computeCartSummary(cart);
       return { data: { message: 'Cart updated', cart: summary } };
@@ -302,11 +339,19 @@ export async function executeTool(
         logInfo(`group_add_item: product not purchasable productId=${productId}`, { traceId: ctx.traceId });
         return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
       }
-      const groupUnitPrice = parseFloat(product.price ?? '');
-      if (!product.price || product.price.trim() === '' || isNaN(groupUnitPrice) || groupUnitPrice <= 0) {
+      // Group tiered pricing: < 2 boxes → importPricePer2Boxes, >= 2 boxes → importPricePerSurface. Service picks after allocation.
+      const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+      const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+      const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+      const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+      const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+      const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+      if (!hasTierPrices && (isNaN(fallbackUnitPrice) || fallbackUnitPrice <= 0)) {
         logInfo(`group_add_item: product missing/invalid price productId=${productId}`, { traceId: ctx.traceId });
-        return { data: { error: `Sorry, "${product.name}" doesn't have a price set yet and can't be added.` } };
+        return { data: { error: `Sorry, "${product.name}" doesn't have a group/import price set yet and can't be added to the group order.` } };
       }
+      // Always pass a positive fallback so service can use it when tier formula yields 0 or invalid
+      const groupUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
       if (product.inStock === false) {
         logInfo(`group_add_item: product out of stock productId=${productId}`, { traceId: ctx.traceId });
         return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
@@ -325,7 +370,7 @@ export async function executeTool(
       }
 
       try {
-        // Use new strict allocation service
+        // Use new strict allocation service. Tier prices: < 2 boxes → importPricePer2Boxes, >= 2 → importPricePerSurface.
         const result = await addItemToGroupOrder({
           code,
           customerId: ctx.customerId,
@@ -333,7 +378,11 @@ export async function executeTool(
           quantityUnits: quantity,
           productName: product.name,
           unitPrice: groupUnitPrice,
-          imageUrl: product.images?.[0]?.src ?? null
+          imageUrl: product.images?.[0]?.src ?? null,
+          ...(hasTierPrices && {
+            importPricePer2Boxes: importPer2,
+            importPricePerSurface: importPerSurface,
+          }),
         });
 
         if (!result.success) {
@@ -445,6 +494,266 @@ export async function executeTool(
         args.productId as string
       );
       return { data: go };
+    }
+
+    // ── M2: Order type options ──
+    case 'get_order_type_options': {
+      const productId = args.productId as string;
+      const sessionContext = ctx.sessionContext ?? buildDefaultSessionContext(ctx.customerId);
+
+      try {
+        const result = await getAvailableOrderTypes(productId, ctx.customerId, sessionContext);
+        return { data: result };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`get_order_type_options failed productId=${productId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    // ── M2: Import order tools ──
+    case 'import_order_create': {
+      const deadlineHours = args.deadlineHours as number | undefined;
+
+      try {
+        const result = await createImportOrder(ctx.customerId, deadlineHours);
+        logInfo(`import_order_create: success code=${result.code}`, { traceId: ctx.traceId });
+        // Return full group-order shape so UI can show surfaces, layers, MOQ (same as group order status).
+        const status = await getGroupOrderStatus(result.code);
+        return { data: status };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError('import_order_create failed', { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_order_check': {
+      const productId = args.productId as string;
+      let customerId = (args.customerId as string) ?? ctx.customerId;
+      if (customerId === 'private_consumer' || customerId === 'retailer') customerId = ctx.customerId;
+
+      const product = await woo.getProduct(productId);
+      if (!product) return { data: { error: `Product ${productId} not found` } };
+
+      const manufacturer =
+        product.manufacturer ??
+        (product.metadata?.manufacturer as string | undefined);
+      if (!manufacturer) {
+        return {
+          data: {
+            error: `Product "${product.name}" has no manufacturer mapping`,
+            productId,
+            productName: product.name,
+            existingOrders: [],
+          },
+        };
+      }
+
+      try {
+        const orders = await getOpenImportOrders(customerId, manufacturer.trim());
+        return {
+          data: {
+            productId,
+            productName: product.name,
+            manufacturer: manufacturer.trim(),
+            existingOrders: orders,
+          },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_order_check failed productId=${productId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_add_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      const quantity = (args.quantity as number) ?? 1;
+
+      const product = await woo.getProduct(productId);
+      if (!product) {
+        logInfo(`import_add_item: product not found productId=${productId}`, { traceId: ctx.traceId });
+        return { data: { error: `Product ${productId} not found` } };
+      }
+
+      if (product.purchasable === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
+      }
+      if (product.inStock === false) {
+        return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
+      }
+
+      const logistics = extractProductLogistics(product);
+      if (!logistics || 'missingFields' in logistics) {
+        const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+        logInfo(`import_add_item: missing logistics productId=${productId} missing=${missing.join(', ')}`, { traceId: ctx.traceId });
+        return {
+          data: {
+            error: `Cannot add "${product.name}" to import order — missing required logistics fields: ${missing.join(', ')}. Please update the product data in HubSpot.`,
+          },
+        };
+      }
+
+      // Same tier pricing as group orders: importPricePer2Boxes / importPricePerSurface or fallback unit price
+      const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+      const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+      const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+      const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+      const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+      const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+      if (!hasTierPrices && (isNaN(fallbackUnitPrice) || fallbackUnitPrice <= 0)) {
+        logInfo(`import_add_item: product missing/invalid price productId=${productId}`, { traceId: ctx.traceId });
+        return {
+          data: {
+            error: `Sorry, "${product.name}" doesn't have a group/import price set yet and can't be added to the import order.`,
+          },
+        };
+      }
+      const importUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
+
+      try {
+        const result = await addItemToImportOrder(code, ctx.customerId, logistics, quantity, {
+          productName: product.name,
+          unitPrice: importUnitPrice,
+          imageUrl: product.images?.[0]?.src ?? null,
+          ...(hasTierPrices && {
+            importPricePer2Boxes: importPer2,
+            importPricePerSurface: importPerSurface,
+          }),
+        });
+
+        if (!result.success) {
+          logInfo(`import_add_item: allocation failed productId=${productId} code=${code}`, {
+            traceId: ctx.traceId,
+            error: result.error,
+          });
+
+          let userMessage = result.error?.message ?? 'Failed to add item to import order';
+          if (result.error?.code === 'MANUFACTURER_MISMATCH') {
+            userMessage = `This import order is locked to a different manufacturer. "${product.name}" cannot be added.`;
+          } else if (result.error?.code === 'OVERFLOW') {
+            userMessage = `Cannot add ${quantity} units — would exceed palette capacity. ${result.error.message}`;
+          } else if (result.error?.code === 'SINGLE_USER_VIOLATION') {
+            userMessage = result.error.message;
+          }
+
+          return { data: { error: userMessage, details: result.error } };
+        }
+
+        const status = await getGroupOrderStatus(code);
+        logInfo(`import_add_item: success productId=${productId} code=${code}`, {
+          traceId: ctx.traceId,
+          allocatedBoxes: result.allocatedBoxes,
+          allocatedUnits: result.allocatedUnits,
+        });
+
+        return {
+          data: {
+            message: `Added ${result.allocatedUnits} units (${result.allocatedBoxes} boxes) to import order ${code}`,
+            ...status,
+            allocationResult: {
+              allocatedBoxes: result.allocatedBoxes,
+              allocatedUnits: result.allocatedUnits,
+              surfacesOpened: result.surfacesOpened,
+              layersOpened: result.layersOpened,
+            },
+          },
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_add_item: service error productId=${productId} code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_order_list': {
+      let customerId = (args.customerId as string) ?? ctx.customerId;
+      if (customerId === 'private_consumer' || customerId === 'retailer') customerId = ctx.customerId;
+      try {
+        const orders = await getOpenImportOrders(customerId);
+        return { data: { orders, customerId } };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_order_list failed customerId=${customerId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg, orders: [] } };
+      }
+    }
+
+    case 'import_order_status': {
+      const code = args.code as string;
+      try {
+        // Import orders are GroupOrders in DB; use same status shape as group order for unified UI.
+        const status = await getGroupOrderStatus(code);
+        if (!status.isImport) {
+          return { data: { error: `Order ${code} is not an import order. Use group_status for group orders.` } };
+        }
+        return { data: status };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_order_status failed code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_remove_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      try {
+        const existing = await getGroupOrderStatus(code);
+        if (!existing.isImport) {
+          return { data: { error: `Order ${code} is not an import order. Use group_remove_item for group orders.` } };
+        }
+        if (existing.createdByCustomerId !== ctx.customerId) {
+          return { data: { error: 'Only the import order creator can remove items from this order.' } };
+        }
+        const status = await removeGroupOrderItem(code, ctx.customerId, productId);
+        return { data: status };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_remove_item failed code=${code} productId=${productId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_order_delete': {
+      const code = args.code as string;
+      try {
+        const existing = await getGroupOrderStatus(code);
+        if (!existing.isImport) {
+          return { data: { error: `Order ${code} is not an import order. Use group order delete for group orders.` } };
+        }
+        if (existing.createdByCustomerId !== ctx.customerId) {
+          return { data: { error: 'Only the import order creator can delete this order.' } };
+        }
+        const result = await deleteGroupOrderByCreator(code, ctx.customerId);
+        return { data: result };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_order_delete failed code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    // ── M2: Universal order status (AIS-06) ──
+    case 'order_status': {
+      const code = args.code as string | undefined;
+      const orderId = args.orderId as string | undefined;
+
+      if (!code && !orderId) {
+        return { data: { error: 'Please provide an order code or order ID to look up status.' } };
+      }
+
+      const lookup = code ?? orderId!;
+
+      // Group and import orders share the same table; getGroupOrderStatus returns both with isImport flag.
+      try {
+        const goStatus = await getGroupOrderStatus(lookup);
+        return { data: goStatus };
+      } catch {
+        return { data: { error: `Order "${lookup}" not found. Please check the code or ID.` } };
+      }
     }
 
     default:

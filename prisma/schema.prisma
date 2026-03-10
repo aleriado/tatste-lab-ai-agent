@@ -70,6 +70,16 @@ enum GroupOrderStatus {
   CONFIRMED
 }
 
+enum OrderType {
+  GROUP  // Multi-user, shared palette
+  IMPORT // Single-user, full palette (restaurants, supermarkets)
+}
+
+enum CartOrderType {
+  REGULAR // Retail / general order
+  STOCK   // Wholesale / stock order
+}
+
 //
 // Core: Customer + Identity
 //
@@ -319,6 +329,9 @@ model GroupOrder {
   manufacturerId String? @db.VarChar(128)
 
   status GroupOrderStatus @default(DRAFT)
+  orderType       OrderType        @default(GROUP)
+  isImport        Boolean          @default(false)
+  maxParticipants Int?             // null = unlimited (group), 1 = import
   constraintsJson Json?
 
   // MOQ tracking (CLIENT RULE 7: MOQ in surfaces/pallets, not boxes)
@@ -458,13 +471,14 @@ model CartItem {
 
   productId String
   variantId String?
+  orderType CartOrderType @default(REGULAR)
   name      String
   imageUrl  String?
   unitPrice Decimal @db.Decimal(10, 2)
   quantity  Int     @default(1)
   metadata  Json?
 
-  @@unique([cartId, productId, variantId])
+  @@unique([cartId, productId, variantId, orderType])
   @@index([cartId])
 }
 

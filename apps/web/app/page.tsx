@@ -8,6 +8,8 @@ import type {
   CartSnapshot,
   CheckoutLink,
   GroupOrderSnapshot,
+  ImportOrderSnapshot,
+  ContextMetadata,
 } from "@taste-labs/shared";
 import ProductCard from "./components/ProductCard";
 import CartSummary from "./components/CartSummary";
@@ -21,14 +23,15 @@ export interface UiText {
   title: string; subtitle: string; placeholder: string; send: string;
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
-  addToCart: string; details: string; inStock: string; outOfStock: string;
+  purchase: string; details: string; inStock: string; outOfStock: string;
   productSpec: string; manufacturer: string; brand: string; countryOfOrigin: string; sku: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
   clearCart: string; emptyCart: string; completePayment: string;
+  cartLabelGeneral: string; cartLabelStock: string;
   dueNow: string; dueLater: string;
-  groupOrder: string; expires: string; participants: string;
+  groupOrder: string; importOrder: string; expires: string; participants: string;
 }
 
 type ChatMessage = {
@@ -39,7 +42,13 @@ type ChatMessage = {
   suggestions?: string[];
   link?: CheckoutLink;
   groupOrder?: GroupOrderSnapshot;
+  importOrder?: ImportOrderSnapshot;
 };
+
+const HEBREW_RANGE = /[\u0590-\u05FF]/;
+function isHebrew(text: string): boolean {
+  return HEBREW_RANGE.test(text);
+}
 
 const ORCHESTRATOR_BASE =
   process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:5501";
@@ -48,14 +57,15 @@ const UI_TEXT: Record<Lang, {
   title: string; subtitle: string; placeholder: string; send: string;
   welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
   thinking: string; error: string;
-  addToCart: string; details: string; inStock: string; outOfStock: string;
+  purchase: string; details: string; inStock: string; outOfStock: string;
   productSpec: string; manufacturer: string; brand: string; countryOfOrigin: string; sku: string; barcode: string; weight: string;
   stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
   notAvailable: string;
   shoppingCart: string; items: string; total: string; checkout: string;
   clearCart: string; emptyCart: string; completePayment: string;
+  cartLabelGeneral: string; cartLabelStock: string;
   dueNow: string; dueLater: string;
-  groupOrder: string; expires: string; participants: string;
+  groupOrder: string; importOrder: string; expires: string; participants: string;
 }> = {
   en: {
     title: "Taste Labs Concierge",
@@ -70,7 +80,7 @@ const UI_TEXT: Record<Lang, {
     suggest5: "Show open group orders",
     thinking: "Thinking...",
     error: "Something went wrong. Please try again.",
-    addToCart: "Add to cart",
+    purchase: "Purchase",
     details: "Details",
     inStock: "In Stock",
     outOfStock: "Out of Stock",
@@ -95,9 +105,12 @@ const UI_TEXT: Record<Lang, {
     clearCart: "Clear cart",
     emptyCart: "Your cart is empty.",
     completePayment: "Complete Payment",
+    cartLabelGeneral: "General",
+    cartLabelStock: "Stock",
     dueNow: "Due now",
     dueLater: "Due later",
     groupOrder: "Group Order",
+    importOrder: "Import Order",
     expires: "Expires",
     participants: "participants",
   },
@@ -114,7 +127,7 @@ const UI_TEXT: Record<Lang, {
     suggest5: "הצג הזמנות קבוצתיות פתוחות",
     thinking: "חושב...",
     error: "משהו השתבש. נסו שוב.",
-    addToCart: "הוסף לסל",
+    purchase: "רכישה",
     details: "פרטים",
     inStock: "במלאי",
     outOfStock: "אזל מהמלאי",
@@ -139,9 +152,12 @@ const UI_TEXT: Record<Lang, {
     clearCart: "נקה סל",
     emptyCart: "הסל שלך ריק.",
     completePayment: "השלם תשלום",
+    cartLabelGeneral: "רגיל",
+    cartLabelStock: "סטוק",
     dueNow: "לתשלום עכשיו",
     dueLater: "לתשלום מאוחר יותר",
     groupOrder: "הזמנה קבוצתית",
+    importOrder: "הזמנת ייבוא",
     expires: "פג תוקף",
     participants: "משתתפים",
   },
@@ -158,7 +174,8 @@ function getOrCreateChannelUserId(): string {
 }
 
 export default function ChatPage() {
-  const [lang, setLang] = useState<Lang>("en");
+  // Language auto-detected from user input; defaults to Hebrew (Hebrew-first market)
+  const [lang, setLang] = useState<Lang>("he");
   const t = UI_TEXT[lang];
 
   const [messages, setMessages] = useState<ChatMessage[]>([{
@@ -174,7 +191,6 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const sendLockRef = useRef(false);
 
-  // Translate placeholder tokens based on current language
   function tr(text: string): string {
     return text
       .replace("__WELCOME__", t.welcome)
@@ -204,19 +220,25 @@ export default function ChatPage() {
       setLoadingProductId(productIdMatch[1]);
     }
 
+    // Auto-detect language from user input and switch UI direction accordingly
+    const detectedLang: Lang = isHebrew(trimmed) ? "he" : "en";
+    setLang(detectedLang);
+
     setMessages((prev) => [...prev, { from: "user", text: trimmed.replace(/\s*\[productId:[^\]]+\]/g, '') }]);
     setInput("");
     setIsSending(true);
 
-    // Enforce response language based on UI selection
-    const langInstruction = lang === "he"
-      ? "[LANGUAGE: You MUST respond in Hebrew. Keep product names in their original language.] "
-      : "[LANGUAGE: You MUST respond in English. Keep product names in their original language.] ";
+    // M2: Build context metadata from current UI state
+    const contextMetadata: ContextMetadata = {
+      currentPage: "catalog",
+      userType: "private_consumer",
+    };
 
     const payload: InboundMessagePayload = {
       channel: "web",
       channel_user_id: channelUserId,
-      text: langInstruction + trimmed,
+      text: trimmed,
+      contextMetadata,
     };
 
     try {
@@ -240,6 +262,7 @@ export default function ChatPage() {
           suggestions: data.suggestions,
           link: data.link,
           groupOrder: data.groupOrder,
+          importOrder: data.importOrder,
         },
       ]);
     } catch {
@@ -264,8 +287,6 @@ export default function ChatPage() {
     sendMessage(text);
   }
 
-  const toggleLang = () => setLang((prev) => (prev === "en" ? "he" : "en"));
-
   return (
     <div className="chat-container">
       <div className="chat-card" dir={lang === "he" ? "rtl" : "ltr"}>
@@ -275,22 +296,21 @@ export default function ChatPage() {
             <div className="chat-subtitle">{t.subtitle}</div>
           </div>
           <div className="header-actions">
-            <button className="lang-toggle" onClick={toggleLang} type="button" aria-label="Toggle language" title={lang === "en" ? "עברית" : "English"}>
-              {lang === "en" ? (
-                <svg width="22" height="16" viewBox="0 0 22 16"><rect width="22" height="16" fill="#fff"/><rect y="2.5" width="22" height="2" fill="#0038b8"/><rect y="11.5" width="22" height="2" fill="#0038b8"/><polygon points="11,3.5 12.2,6.5 15.5,6.5 12.8,8.5 13.8,11.5 11,9.5 8.2,11.5 9.2,8.5 6.5,6.5 9.8,6.5" fill="#0038b8"/></svg>
-              ) : (
-                <svg width="22" height="16" viewBox="0 0 22 16"><rect width="22" height="16" fill="#012169"/><path d="M0,0 L22,16 M22,0 L0,16" stroke="#fff" strokeWidth="2.5"/><path d="M0,0 L22,16 M22,0 L0,16" stroke="#C8102E" strokeWidth="1.5"/><path d="M11,0 V16 M0,8 H22" stroke="#fff" strokeWidth="4"/><path d="M11,0 V16 M0,8 H22" stroke="#C8102E" strokeWidth="2.5"/></svg>
-              )}
-            </button>
             <span className="chat-badge">M2</span>
           </div>
         </div>
 
         <div className="chat-messages">
-          {messages.map((m, idx) => (
+          {messages.map((m, idx) => {
+            const msgRtl = isHebrew(m.text);
+            return (
             <div key={idx}>
               <div className={`message-row ${m.from}`}>
-                <div className={`message-bubble ${m.from}`}>{tr(m.text)}</div>
+                <div
+                  className={`message-bubble ${m.from}`}
+                  dir={msgRtl ? "rtl" : "ltr"}
+                  style={msgRtl ? { textAlign: "right" } : { textAlign: "left" }}
+                >{tr(m.text)}</div>
               </div>
 
               {m.cards && m.cards.length > 0 && (
@@ -311,13 +331,17 @@ export default function ChatPage() {
 
               {m.cart && <CartSummary cart={m.cart} onAction={handleAction} disabled={isSending} t={t} />}
               {m.groupOrder && <GroupOrderStatus groupOrder={m.groupOrder} t={t} />}
+              {m.importOrder && (
+                <GroupOrderStatus groupOrder={m.importOrder} t={t} isImportOrder />
+              )}
               {m.link && <LinkBubble link={m.link} t={t} />}
 
               {m.suggestions && m.suggestions.length > 0 && (
                 <QuickActions suggestions={m.suggestions.map(tr)} onAction={handleAction} disabled={isSending} />
               )}
             </div>
-          ))}
+            );
+          })}
 
           {isSending && (
             <div className="message-row bot">

@@ -22,15 +22,20 @@ export default function CartSummary({ cart, onAction, disabled, t }: Props) {
         <span className="cart-count">{cart.itemCount} {t.items}</span>
       </div>
       <div className="cart-items">
-        {cart.items.map((item, idx) => (
-          <div key={`${item.productId}-${item.variantId ?? ""}-${idx}`} className="cart-item-row">
-            <div className="cart-item-info">
-              <span className="cart-item-name">{item.name}</span>
-              <span className="cart-item-qty">x{item.quantity}</span>
+        {cart.items.map((item, idx) => {
+          const isStock = item.orderType === "STOCK" || item.orderTypeLabel === "Stock";
+          const orderLabel = isStock ? t.cartLabelStock : t.cartLabelGeneral;
+          return (
+            <div key={`${item.productId}-${item.variantId ?? ""}-${idx}`} className="cart-item-row">
+              <div className="cart-item-info">
+                <span className="cart-item-name">{item.name}</span>
+                <span className="cart-item-type-badge" aria-label={orderLabel}>{orderLabel}</span>
+                <span className="cart-item-qty">x{item.quantity}</span>
+              </div>
+              <span className="cart-item-price">{cart.currency} {item.lineTotal}</span>
             </div>
-            <span className="cart-item-price">{cart.currency} {item.lineTotal}</span>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="cart-total-row">
         <span>{t.total}</span>

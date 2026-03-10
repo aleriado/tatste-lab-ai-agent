@@ -35,7 +35,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
     }
   }, [loading]);
 
-  const addText = `Add ${product.name} to cart [productId:${product.id}]`;
+  const addText = `Purchase ${product.name} [productId:${product.id}]`;
   const normalizedType = (product.type ?? "").toLowerCase();
   const isDigital = /download|digital|להורדה/.test(normalizedType) || product.isDownloadable;
   const moqBoxes = product.boxesPerLayer ?? product.boxesPerSurface;
@@ -92,7 +92,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
               type="button"
               disabled={disabled || loading}
             >
-              {loading ? <span className="btn-spinner" /> : t.addToCart}
+              {loading ? <span className="btn-spinner" /> : t.purchase}
             </button>
             <button
               className="product-action-btn detail"
@@ -155,7 +155,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
                 type="button"
                 disabled={disabled || loading}
               >
-                {t.addToCart}
+                {t.purchase}
               </button>
             </div>
           </div>

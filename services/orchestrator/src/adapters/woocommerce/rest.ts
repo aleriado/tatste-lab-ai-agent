@@ -38,6 +38,12 @@ function overlapCount(a: string[] = [], b: string[] = []): number {
   return count;
 }
 
+/** Normalize manufacturer for search and comparison (trim, remove leading dots). */
+function normalizeManufacturer(s: string | undefined | null): string {
+  if (s == null) return '';
+  return String(s).trim().replace(/^\.+/, '').trim();
+}
+
 function getAuthHeader(): string {
   const key = process.env.WOO_CONSUMER_KEY;
   const secret = process.env.WOO_CONSUMER_SECRET;
@@ -297,8 +303,9 @@ export function createRestWooAdapter(): WooCommerceAdapter {
       }
     },
 
-    async getRelatedProducts(productId: string): Promise<WooProduct[]> {
-      return cached(`related:${productId}`, async () => {
+    async getRelatedProducts(productId: string, options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]> {
+      const cacheKey = `related:${productId}:${options?.sameManufacturerOnly ?? false}`;
+      return cached(cacheKey, async () => {
         try {
           const source = getProductSource();
           const product = await this.getProduct(productId);
@@ -306,11 +313,12 @@ export function createRestWooAdapter(): WooCommerceAdapter {
 
           if (source === 'hubspot') {
             // STRICT: Only use HubSpot products for related/cross-sell
+            const mfrNormalized = normalizeManufacturer(product.manufacturer);
             const queries = [
               product.categories?.[0]?.name ?? '',
-              product.manufacturer ?? '',
+              mfrNormalized,
               ''
-            ].filter((q, idx, arr) => q.trim().length > 0 || idx === arr.length - 1);
+            ].filter((q, idx, arr) => q.length > 0 || idx === arr.length - 1);
 
             const pool: WooProduct[] = [];
             const seen = new Set<string>();
@@ -328,6 +336,7 @@ export function createRestWooAdapter(): WooCommerceAdapter {
 
             const currentHubSpotId = String(product.metadata?.hubspotProductId ?? '');
             const currentCats = (product.categories ?? []).map((c) => c.name);
+            const productMfrNorm = normalizeManufacturer(product.manufacturer);
             const ranked = pool
               .filter((p) => {
                 if (p.id === product.id) return false;
@@ -337,20 +346,28 @@ export function createRestWooAdapter(): WooCommerceAdapter {
               })
               .map((p) => {
                 const pCats = (p.categories ?? []).map((c) => c.name);
+                const pMfrNorm = normalizeManufacturer(p.manufacturer);
                 const sameManufacturer =
-                  !!product.manufacturer &&
-                  !!p.manufacturer &&
-                  product.manufacturer.toLowerCase() === p.manufacturer.toLowerCase();
+                  productMfrNorm.length > 0 &&
+                  pMfrNorm.length > 0 &&
+                  productMfrNorm.toLowerCase() === pMfrNorm.toLowerCase();
                 const categoryOverlap = overlapCount(currentCats, pCats);
                 const score = (sameManufacturer ? 3 : 0) + categoryOverlap;
-                return { p, score };
+                return { p, score, sameManufacturer };
               })
               .sort((a, b) => b.score - a.score)
-              .map((entry) => entry.p)
-              .slice(0, 4);
+              .map((entry) => entry.p);
 
-            // STRICT: Return empty array if no HubSpot products found (no WooCommerce fallback)
-            return ranked;
+            // When sameManufacturerOnly: return only products from the same manufacturer (so import/group add won't fail)
+            const sameManufacturerOnly = (options?.sameManufacturerOnly === true);
+            const filtered = sameManufacturerOnly && productMfrNorm.length > 0
+              ? ranked.filter((p) => {
+                  const pMfr = normalizeManufacturer(p.manufacturer);
+                  return pMfr.length > 0 && pMfr.toLowerCase() === productMfrNorm.toLowerCase();
+                })
+              : ranked;
+
+            return filtered.slice(0, 4);
           }
 
           // WooCommerce source path

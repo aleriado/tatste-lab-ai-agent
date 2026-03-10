@@ -49,6 +49,8 @@ export async function loadGroupOrderState(codeOrId: string): Promise<GroupOrderS
     manufacturerId: groupOrder.manufacturerId,
     moqSurfaces: groupOrder.moqSurfaces,
     surfaceMaxLayers: groupOrder.surfaceMaxLayers,
+    isImport: groupOrder.isImport,
+    maxParticipants: groupOrder.maxParticipants,
     surfaces: groupOrder.surfaces.map(surface => ({
       id: surface.id,
       surfaceIndex: surface.surfaceIndex,
@@ -72,6 +74,90 @@ export async function loadGroupOrderState(codeOrId: string): Promise<GroupOrderS
 }
 
 /**
+ * Load open import orders for a customer, optionally filtered by manufacturer.
+ *
+ * @param customerId - The customer who created the import orders
+ * @param manufacturerId - Optional manufacturer filter
+ */
+export async function loadImportOrdersByCustomer(
+  customerId: string,
+  manufacturerId?: string
+): Promise<GroupOrderState[]> {
+  const where: Record<string, unknown> = {
+    createdByCustomerId: customerId,
+    isImport: true,
+    status: { in: ['OPEN', 'DRAFT', 'MOQ_REACHED'] },
+  };
+  if (manufacturerId) {
+    where.manufacturerId = manufacturerId;
+  }
+
+  const orders = await prisma.groupOrder.findMany({
+    where,
+    include: {
+      surfaces: {
+        include: { layers: true },
+        orderBy: { surfaceIndex: 'asc' },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const config = getGroupOrderConfig();
+
+  return orders.map((go) => ({
+    id: go.id,
+    code: go.code,
+    manufacturerId: go.manufacturerId,
+    moqSurfaces: go.moqSurfaces,
+    surfaceMaxLayers: go.surfaceMaxLayers,
+    isImport: go.isImport,
+    maxParticipants: go.maxParticipants,
+    surfaces: go.surfaces.map((surface) => ({
+      id: surface.id,
+      surfaceIndex: surface.surfaceIndex,
+      maxLayers: surface.maxLayers,
+      status: surface.status,
+      layers: surface.layers.map((layer) => ({
+        id: layer.id,
+        layerIndex: layer.layerIndex,
+        productId: layer.productId,
+        variantId: layer.variantId,
+        capacityBoxes: layer.capacityBoxes,
+        capacityUnits: layer.capacityUnits,
+        filledBoxes: layer.filledBoxes,
+        filledUnits: layer.filledUnits,
+        status: layer.status,
+      })),
+    })),
+    allowExtraSurfaces: config.allowExtraSurfaces,
+    maxSurfacesLimit: config.maxSurfaces,
+  }));
+}
+
+/**
+ * Validate that a given customer is the owner of an import order.
+ *
+ * @param code - The import order code
+ * @param customerId - The customer to validate
+ * @returns `true` if the customer created the import order, `false` otherwise
+ */
+export async function validateImportOrderOwner(
+  code: string,
+  customerId: string
+): Promise<boolean> {
+  const go = await prisma.groupOrder.findUnique({
+    where: { code },
+    select: { isImport: true, createdByCustomerId: true },
+  });
+
+  if (!go || !go.isImport) return false;
+
+  return go.createdByCustomerId === customerId;
+}
+
+
+/**
  * Save allocation result to database with transaction and locking
  * 
  * Uses row-level locking (SELECT FOR UPDATE) to prevent concurrent allocations
@@ -89,7 +175,9 @@ export async function saveAllocationResult(
   manufacturer: string,
   boxesPerLayer: number,
   unitsPerBox: number,
-  layersPerSurface: number
+  layersPerSurface: number,
+  importPricePer2Boxes?: number,
+  importPricePerSurface?: number
 ): Promise<void> {
   if (!result.success) {
     throw new Error(`Cannot save failed allocation: ${result.error?.message}`);
@@ -106,6 +194,9 @@ export async function saveAllocationResult(
       throw new Error(`Group order ${groupOrderId} not found`);
     }
 
+    // Normalize manufacturer (trim, remove leading dots) so search and display are consistent
+    const manufacturerNormalized = (manufacturer ?? '').trim().replace(/^\.+/, '').trim() || manufacturer;
+
     // Update manufacturer and surfaceMaxLayers if this is the first product
     // surfaceMaxLayers = MIN(layersPerSurface) across all products in this order.
     // On first product, initialize from the product's layersPerSurface.
@@ -118,7 +209,7 @@ export async function saveAllocationResult(
       await tx.groupOrder.update({
         where: { id: groupOrderId },
         data: {
-          manufacturerId: manufacturer,
+          manufacturerId: manufacturerNormalized,
           surfaceMaxLayers: newSurfaceMaxLayers
         }
       });
@@ -230,11 +321,22 @@ export async function saveAllocationResult(
       }
     });
 
+    const totalBoxesAfter = (existingItem?.quantity ?? 0) + result.allocatedBoxes;
+    const hasTierPrices =
+      typeof importPricePer2Boxes === 'number' && typeof importPricePerSurface === 'number';
+    const effectiveUnitPrice =
+      hasTierPrices
+        ? totalBoxesAfter < 2
+          ? importPricePer2Boxes!
+          : importPricePerSurface!
+        : unitPrice;
+
     if (existingItem) {
       await tx.groupOrderItem.update({
         where: { id: existingItem.id },
         data: {
-          quantity: existingItem.quantity + result.allocatedBoxes
+          quantity: totalBoxesAfter,
+          unitPrice: effectiveUnitPrice
         }
       });
     } else {
@@ -246,7 +348,7 @@ export async function saveAllocationResult(
           variantId,
           name: productName,
           imageUrl,
-          unitPrice,
+          unitPrice: effectiveUnitPrice,
           quantity: result.allocatedBoxes,
           metadata: {} as any
         }
@@ -285,12 +387,15 @@ export async function recalcMoq(groupOrderId: string): Promise<number> {
   if (!go) return 0;
 
   // New algorithm: calculate from surfaces/layers
+  // MOQ = minimum number of *fully filled* pallet surfaces. A surface counts only when ALL its layers are full.
   if (go.surfaces && go.surfaces.length > 0) {
     const totalBoxes = go.surfaces.reduce(
       (sum, s) => sum + s.layers.reduce((ls, l) => ls + l.filledBoxes, 0),
       0
     );
-    const filledSurfaces = go.surfaces.filter(s => s.layers.some(l => l.filledBoxes > 0)).length;
+    const filledSurfaces = go.surfaces.filter(
+      s => s.layers.length > 0 && s.layers.every(l => l.status === 'full')
+    ).length;
     const moqCurrent = filledSurfaces;
 
     const productMap = new Map<string, { boxes: number; capacity: number }>();

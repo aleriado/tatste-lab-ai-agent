@@ -55,6 +55,8 @@ export interface GroupOrderState {
   surfaces: SurfaceState[];
   allowExtraSurfaces: boolean;
   maxSurfacesLimit: number;
+  isImport: boolean;
+  maxParticipants: number | null;
 }
 
 export interface SurfaceState {

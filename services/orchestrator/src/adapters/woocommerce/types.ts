@@ -85,5 +85,5 @@ export interface WooCommerceAdapter {
   searchProducts(query: string, filters?: { category?: string; limit?: number }): Promise<WooProduct[]>;
   getProduct(productId: string): Promise<WooProduct | null>;
   getProductVariations(productId: string): Promise<WooVariation[]>;
-  getRelatedProducts(productId: string): Promise<WooProduct[]>;
+  getRelatedProducts(productId: string, options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]>;
 }

@@ -6,20 +6,23 @@ import type { UiText } from "../page";
 interface Props {
   groupOrder: GroupOrderSnapshot;
   t: UiText;
+  /** When true, show "Import Order" label and treat as single-participant (same UI as group order). */
+  isImportOrder?: boolean;
 }
 
-export default function GroupOrderStatus({ groupOrder, t }: Props) {
+export default function GroupOrderStatus({ groupOrder, t, isImportOrder }: Props) {
   const progress = groupOrder.moqTarget > 0
     ? Math.min(100, Math.round((groupOrder.moqCurrent / groupOrder.moqTarget) * 100))
     : 0;
   
   const hasSurfaces = groupOrder.surfaces && groupOrder.surfaces.length > 0;
   const hasItems = groupOrder.progress && groupOrder.progress.productLayers.length > 0;
+  const orderLabel = isImportOrder ? t.importOrder : t.groupOrder;
 
   return (
     <div className="group-order-status">
       <div className="group-order-header">
-        <span className="group-order-label">{t.groupOrder}</span>
+        <span className="group-order-label">{orderLabel}</span>
         <span className="group-order-code">{groupOrder.code}</span>
       </div>
       

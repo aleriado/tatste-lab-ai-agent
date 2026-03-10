@@ -3,9 +3,11 @@ import { getOpenAI, getModel } from './openaiClient';
 import { buildSystemPrompt, type SystemPromptContext } from './systemPrompt';
 import { conciergeTools } from './tools';
 import { executeTool, type ToolContext } from './toolExecutor';
+import { tagMessageWithLanguage, detectLanguage } from './languageHandler';
+import { stripPricesForCatalogExtension } from './interventionGates';
 import type { WooProduct } from '../adapters/woocommerce';
 import type { CartSummary } from '@taste-labs/db';
-import type { ProductCard, CartSnapshot, GroupOrderSnapshot, CheckoutLink } from '@taste-labs/shared';
+import type { ProductCard, CartSnapshot, GroupOrderSnapshot, ImportOrderSnapshot, CheckoutLink } from '@taste-labs/shared';
 import { logInfo, logError } from '../logger';
 
 const MAX_TOOL_ROUNDS = 6;
@@ -24,6 +26,8 @@ export interface ChatLoopResult {
   suggestions?: string[];
   link?: CheckoutLink;
   groupOrder?: GroupOrderSnapshot;
+  importOrder?: ImportOrderSnapshot;
+  detectedLanguage?: 'he' | 'en';
 }
 
 function wooToCard(p: WooProduct): ProductCard {
@@ -68,6 +72,10 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
   const openai = getOpenAI();
   const model = getModel();
 
+  // M2: Detect language and tag the user message
+  const detectedLang = detectLanguage(userMessage);
+  const taggedMessage = tagMessageWithLanguage(userMessage);
+
   const systemPrompt = buildSystemPrompt(systemPromptContext);
 
   const messages: ChatCompletionMessageParam[] = [
@@ -76,7 +84,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
       role: m.role as 'user' | 'assistant',
       content: m.content
     })),
-    { role: 'user', content: userMessage }
+    { role: 'user', content: taggedMessage }
   ];
 
   // Collect structured data from tool calls
@@ -84,6 +92,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
   let collectedCart: CartSnapshot | undefined;
   let collectedLink: CheckoutLink | undefined;
   let collectedGroupOrder: GroupOrderSnapshot | undefined;
+  let collectedImportOrder: ImportOrderSnapshot | undefined;
   // Prevent duplicate cart_add_item calls for the same product within one request
   const addedProductIds = new Set<string>();
 
@@ -111,16 +120,20 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
       const reply = assistantMessage.content ?? '';
 
-      // Generate suggestions based on context
-      const suggestions = generateSuggestions(collectedCards, collectedCart);
+      // M2: AIS-04 — strip prices from CATALOG_EXTENSION products before sending to frontend
+      const sanitizedCards = collectedCards.map(stripPricesForCatalogExtension);
+
+      const suggestions = generateSuggestions(sanitizedCards, collectedCart);
 
       return {
         reply,
-        cards: collectedCards.length > 0 ? collectedCards : undefined,
+        cards: sanitizedCards.length > 0 ? sanitizedCards : undefined,
         cart: collectedCart,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         link: collectedLink,
-        groupOrder: collectedGroupOrder
+        groupOrder: collectedGroupOrder,
+        importOrder: collectedImportOrder,
+        detectedLanguage: detectedLang,
       };
     }
 
@@ -154,7 +167,6 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
 
         // Collect structured data for frontend
         if (result.products && result.products.length > 0) {
-          // Replace cards on each new product search, append for complements
           if (fnName === 'product_search') {
             collectedCards = result.products.map(wooToCard);
           } else {
@@ -178,8 +190,8 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
           };
         }
 
-        // Collect group order status
-        if (data?.code && data?.moqTarget !== undefined) {
+        // Collect group order status (non-import group orders)
+        if (data?.code && data?.moqTarget !== undefined && !data?.isImport) {
           collectedGroupOrder = {
             code: data.code,
             status: data.status,
@@ -193,6 +205,27 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
             progress: data.progress ?? undefined,
             surfaces: data.surfaces ?? undefined,
             participantCosts: data.participantCosts ?? undefined
+          };
+        }
+
+        // M2: Collect import order snapshot (same shape as group order for unified status UI)
+        if (data?.isImport === true && data?.code) {
+          collectedImportOrder = {
+            code: data.code,
+            status: data.status,
+            moqCurrent: data.moqCurrent ?? 0,
+            moqTarget: data.moqTarget ?? data.moqSurfaces ?? 1,
+            moqSurfaces: data.moqSurfaces ?? 1,
+            surfaceMaxLayers: data.surfaceMaxLayers ?? undefined,
+            manufacturer: data.manufacturer ?? undefined,
+            participantCount: data.participantCount ?? 1,
+            expiresAt: data.expiresAt != null
+              ? (typeof data.expiresAt === 'string' ? data.expiresAt : (data.expiresAt as Date).toISOString())
+              : undefined,
+            progress: data.progress ?? undefined,
+            surfaces: data.surfaces ?? undefined,
+            participantCosts: data.participantCosts ?? undefined,
+            isImport: true,
           };
         }
 
@@ -223,7 +256,7 @@ function generateSuggestions(cards: ProductCard[], cart?: CartSnapshot): string[
   for (const card of cards) {
     // Do NOT embed productId tags — they become stale in conversation history
     // and cause the AI to use outdated IDs instead of calling product_search first
-    suggestions.push(`Add ${card.name} to cart`);
+    suggestions.push(`Purchase ${card.name}`);
   }
 
   if (cart && cart.items.length > 0) {

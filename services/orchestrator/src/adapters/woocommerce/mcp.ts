@@ -179,7 +179,7 @@ export function createMcpWooAdapter(): WooCommerceAdapter {
       }
     },
 
-    async getRelatedProducts(productId: string): Promise<WooProduct[]> {
+    async getRelatedProducts(productId: string, _options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]> {
       try {
         const product = await this.getProduct(productId);
         if (!product) return [];

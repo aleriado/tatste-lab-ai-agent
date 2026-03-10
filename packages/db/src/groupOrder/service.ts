@@ -15,8 +15,17 @@ export interface AddItemToGroupOrderInput {
   product: ProductLogistics;
   quantityUnits: number;
   productName: string;
+  /** Fallback when tier prices are not provided. */
   unitPrice: number;
   imageUrl: string | null;
+  /**
+   * Group/import tier pricing (both are already price per unit):
+   * - When user's total boxes for this product < 2 → unit price = importPricePer2Boxes.
+   * - When user's total boxes >= 2 → unit price = importPricePerSurface.
+   * Total price = unitPrice * total units.
+   */
+  importPricePer2Boxes?: number;
+  importPricePerSurface?: number;
 }
 
 export interface AddItemToGroupOrderResult {
@@ -45,7 +54,7 @@ export interface AddItemToGroupOrderResult {
 export async function addItemToGroupOrder(
   input: AddItemToGroupOrderInput
 ): Promise<AddItemToGroupOrderResult> {
-  const { code, customerId, product, quantityUnits, productName, unitPrice, imageUrl } = input;
+  const { code, customerId, product, quantityUnits, productName, unitPrice, imageUrl, importPricePer2Boxes, importPricePerSurface } = input;
 
   try {
     // Load current group order state
@@ -81,6 +90,7 @@ export async function addItemToGroupOrder(
       };
     }
 
+    // Tier is chosen in saveAllocationResult from user's total boxes (existing + this add). Both tier prices are per-unit.
     // Save allocation result to database
     await saveAllocationResult(
       groupOrder.id,
@@ -94,7 +104,9 @@ export async function addItemToGroupOrder(
       product.manufacturer,
       product.boxesPerLayer,
       product.unitsPerBox,
-      product.layersPerSurface
+      product.layersPerSurface,
+      importPricePer2Boxes,
+      importPricePerSurface
     );
 
     // Auto-join: ensure the customer is a participant (implicit join on first add)
