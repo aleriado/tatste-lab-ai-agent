@@ -48,7 +48,7 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'suggest_complements',
-      description: 'Get complementary/related products from the Taste Labs catalog for cross-sell. MUST be called after every cart_add_item. When the user asks for recommendations to add to their import order or group order, or "same manufacturer" products, pass sameManufacturerOnly: true and use the productId from that order so only products from the same manufacturer are returned (they can be added to the same order). Returns other products that pair well with the given product.',
+      description: 'Get complementary/related products from the Taste Labs catalog for cross-sell (returns at most 3). MUST be called after every cart_add_item. When the user asks for recommendations to add to their import order or group order, or "same manufacturer" products, pass sameManufacturerOnly: true and use the productId from that order. In your reply, show at most 2–3 recommendations.',
       parameters: {
         type: 'object',
         properties: {
@@ -282,7 +282,7 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'get_order_type_options',
-      description: 'Get available order types for a product. Returns which order types (Regular, Stock, Group, Import) are available based on product state, logistics metadata, and user type. Includes pricing per type, recommendations, existing open orders, and unitsPerBox (use to convert "X boxes" to units: quantity = X × unitsPerBox when calling group_add_item or import_add_item). Use when a user wants to add a product to cart or asks about ordering options.',
+      description: 'Get available order types for a product. Returns which order types (Regular, Stock, Group, Import) are available, pricing, existing orders, and unitsPerBox. When the user then replies with a quantity (e.g. "70"), you MUST use this same productId for cart_add_item — do not use a different product ID or cart_add_item will fail with "not purchasable".',
       parameters: {
         type: 'object',
         properties: {

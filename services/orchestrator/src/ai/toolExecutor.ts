@@ -138,7 +138,8 @@ export async function executeTool(
       const productId = args.productId as string;
       const sameManufacturerOnly = args.sameManufacturerOnly === true;
       const related = await woo.getRelatedProducts(productId, { sameManufacturerOnly });
-      return { data: related, products: related };
+      const capped = related.slice(0, 3); // max 3 recommendations
+      return { data: capped, products: capped };
     }
 
     // ── Cart tools ──
@@ -155,13 +156,20 @@ export async function executeTool(
       logInfo(`cart_add_item: productId=${productId}, quantity=${quantity}, orderType=${orderType}, ai_requested_qty=${args.quantity}`, { traceId: ctx.traceId });
 
       const product = await woo.getProduct(productId);
-      if (!product) return { data: { error: `Product ${productId} not found in catalog` } };
+      if (!product) {
+        return {
+          data: {
+            error: `Product ${productId} not found in catalog. When the user replied with only a number (quantity), use the productId from your last get_order_type_options result (available.productId), not from another source.`,
+            reason: 'not_found'
+          }
+        };
+      }
 
       if (product.purchasable === false) {
-        return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.` } };
+        return { data: { error: `Sorry, "${product.name}" is currently not available for purchase.`, reason: 'not_purchasable' } };
       }
       if (product.inStock === false) {
-        return { data: { error: `Sorry, "${product.name}" is currently out of stock.` } };
+        return { data: { error: `Sorry, "${product.name}" is currently out of stock.`, reason: 'out_of_stock' } };
       }
 
       // Use unitPrice from args (from get_order_type_options); fallback to product price by order type
@@ -174,7 +182,7 @@ export async function executeTool(
         unitPrice = orderType === 'stock' && !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
       }
       if (isNaN(unitPrice) || unitPrice <= 0) {
-        return { data: { error: `Sorry, "${product.name}" doesn't have a price set for ${orderType} and can't be added to cart.` } };
+        return { data: { error: `Sorry, "${product.name}" doesn't have a price set for ${orderType} and can't be added to cart.`, reason: 'no_price' } };
       }
 
       const cart = await addCartItem(ctx.customerId, {

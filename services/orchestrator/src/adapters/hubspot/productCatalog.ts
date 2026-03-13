@@ -254,9 +254,11 @@ function mapHubSpotToWooProduct(
   }
 
   // Pricing — use HubSpot's actual field names directly
+  // n2 = group import pricing (per carton) → used for group order type (importPricePerSurface)
+  // n4 = full pallet import pricing → used for import order type (importPricePer2Boxes)
   const costPrice = firstNonEmpty([p.hs_cost_of_goods_sold, p.cost_price, p.cost]);
-  const importPricePerSurface = firstNonEmpty([p.n4_mhyr_ybwn_lmsth_ml_full_pallet_import_pricing]);
-  const importPricePer2Boxes = firstNonEmpty([p.n2_mhyr_ybwn_qbwzty_group_import_pricing__per_carton]);
+  const importPricePerSurface = firstNonEmpty([p.n2_mhyr_ybwn_qbwzty_group_import_pricing__per_carton]);
+  const importPricePer2Boxes = firstNonEmpty([p.n4_mhyr_ybwn_lmsth_ml_full_pallet_import_pricing]);
   const wholesalePrice = firstNonEmpty([p.n3_mhyr_sytwny_wholesale_pricing__per_carton]);
   const retailPrice = firstNonEmpty([p.mhyr_qmwny_lyhydh_retail_unit_price, p.price]);
   const salePrice = firstNonEmpty([p.sale_price, p.on_sale_price]);
@@ -266,6 +268,9 @@ function mapHubSpotToWooProduct(
 
   const barcode = firstNonEmpty([p.barcode, p.ean, p.ean13, p.upc, p.gtin]);
   const status = firstNonEmpty([p.hs_status, p.status]);
+  const statusLower = status?.toLowerCase();
+  // Use only hs_status for purchasable and inStock: active (or missing) = purchasable and in stock; inactive/draft/archived = not.
+  const notPurchasableByStatus = statusLower && ['inactive', 'draft', 'archived', 'deleted'].includes(statusLower);
   const isDownloadableRaw = firstNonEmpty([p.is_downloadable, p.downloadable]);
   const isDownloadable = isDownloadableRaw != null
     ? ['1', 'true', 'yes'].includes(isDownloadableRaw.toLowerCase())
@@ -296,14 +301,8 @@ function mapHubSpotToWooProduct(
 
   const description = shortDescription ?? detailedDescription;
 
-  const stockStatus = firstNonEmpty([p.stock_status])?.toLowerCase();
-  const inStockRaw = firstNonEmpty([p.in_stock]);
-  const inStock =
-    inStockRaw != null
-      ? ['1', 'true', 'yes', 'instock'].includes(inStockRaw.toLowerCase())
-      : stockStatus
-        ? stockStatus === 'instock' || stockStatus === 'in_stock'
-        : undefined;
+  // inStock = same as purchasable: only hs_status matters. No in_stock/stock_status — avoid blocking active products.
+  const inStock: boolean = !notPurchasableByStatus;
 
   return {
     id: productId,
@@ -319,7 +318,7 @@ function mapHubSpotToWooProduct(
     type: 'simple',
     inStock,
     inventory,
-    purchasable: true,
+    purchasable: !notPurchasableByStatus,
     weight: firstNonEmpty([p.weight]),
     sku,
     barcode: barcode ?? sku,

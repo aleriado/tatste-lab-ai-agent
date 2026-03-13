@@ -418,7 +418,7 @@ export async function evaluateOrderTypeOptions(
       type: 'group',
       available: true,
       recommended: ais02Result.activeOrders.length > 0,
-      pricePerUnit: disclosure.prices.importPerSurface ?? disclosure.prices.importPer2Boxes,
+      pricePerUnit: disclosure.prices.importPerSurface, // group order: import price per surface only
       reason: ais02Result.activeOrders.length > 0
         ? `${ais02Result.activeOrders.length} active group order(s) available for ${product.manufacturer}.`
         : 'Share a palette with other buyers for import pricing.',
@@ -440,7 +440,7 @@ export async function evaluateOrderTypeOptions(
       type: 'import',
       available: true,
       recommended: false,
-      pricePerUnit: disclosure.prices.importPerSurface ?? disclosure.prices.importPer2Boxes,
+      pricePerUnit: disclosure.prices.importPer2Boxes, // import order: import price per 2 boxes only
       reason: isRetailer
         ? 'Single-user palette import for restaurants and supermarkets.'
         : 'Single-user palette import. Best suited for supermarkets and business accounts; you can still create one as an individual.',

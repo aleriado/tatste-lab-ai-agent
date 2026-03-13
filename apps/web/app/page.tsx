@@ -50,6 +50,12 @@ function isHebrew(text: string): boolean {
   return HEBREW_RANGE.test(text);
 }
 
+/** True if the text is only digits (and optional spaces). Used to avoid flipping layout when user sends e.g. "50". */
+function isNumbersOnly(text: string): boolean {
+  const t = text.trim().replace(/\s/g, "");
+  return t.length > 0 && /^\d+$/.test(t);
+}
+
 const ORCHESTRATOR_BASE =
   process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:5501";
 
@@ -163,13 +169,36 @@ const UI_TEXT: Record<Lang, {
   },
 };
 
+const WEB_USER_ID_KEY = "taste_labs_web_user_id";
+const WEB_USER_ID_COOKIE_DAYS = 365;
+
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/[^\\w]/g, "\\$&") + "=([^;]*)"));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function setCookie(name: string, value: string, days: number): void {
+  if (typeof document === "undefined") return;
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${days * 86400}; SameSite=Lax`;
+}
+
+/** Persists web identity so the backend can resolve the same Customer (and DB cart). Stored in both cookie and localStorage so clearing only one does not lose the cart. Clearing both (e.g. Ctrl+Shift+Del) creates a new anonymous user; login would be needed for cross-session persistence. */
 function getOrCreateChannelUserId(): string {
   if (typeof window === "undefined") return "web-anon";
-  const key = "taste_labs_web_user_id";
-  const existing = window.localStorage.getItem(key);
-  if (existing) return existing;
+  const fromCookie = getCookie(WEB_USER_ID_KEY);
+  if (fromCookie) {
+    try { window.localStorage.setItem(WEB_USER_ID_KEY, fromCookie); } catch { /* ignore */ }
+    return fromCookie;
+  }
+  const fromStorage = window.localStorage.getItem(WEB_USER_ID_KEY);
+  if (fromStorage) {
+    setCookie(WEB_USER_ID_KEY, fromStorage, WEB_USER_ID_COOKIE_DAYS);
+    return fromStorage;
+  }
   const id = `web_${Math.random().toString(36).slice(2)}`;
-  window.localStorage.setItem(key, id);
+  window.localStorage.setItem(WEB_USER_ID_KEY, id);
+  setCookie(WEB_USER_ID_KEY, id, WEB_USER_ID_COOKIE_DAYS);
   return id;
 }
 
@@ -220,9 +249,11 @@ export default function ChatPage() {
       setLoadingProductId(productIdMatch[1]);
     }
 
-    // Auto-detect language from user input and switch UI direction accordingly
-    const detectedLang: Lang = isHebrew(trimmed) ? "he" : "en";
-    setLang(detectedLang);
+    // Auto-detect language from user input and switch UI direction. Do NOT change direction when user sends only numbers (e.g. "50") so positions stay the same (user left, bot right in RTL).
+    if (!isNumbersOnly(trimmed)) {
+      const detectedLang: Lang = isHebrew(trimmed) ? "he" : "en";
+      setLang(detectedLang);
+    }
 
     setMessages((prev) => [...prev, { from: "user", text: trimmed.replace(/\s*\[productId:[^\]]+\]/g, '') }]);
     setInput("");

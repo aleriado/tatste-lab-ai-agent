@@ -3,7 +3,8 @@ import { getOpenAI, getModel } from './openaiClient';
 import { buildSystemPrompt, type SystemPromptContext } from './systemPrompt';
 import { conciergeTools } from './tools';
 import { executeTool, type ToolContext } from './toolExecutor';
-import { tagMessageWithLanguage, detectLanguage } from './languageHandler';
+import { tagMessageWithLanguage, detectLanguage, isNumbersOnly } from './languageHandler';
+import type { DetectedLanguage } from './languageHandler';
 import { stripPricesForCatalogExtension } from './interventionGates';
 import type { WooProduct } from '../adapters/woocommerce';
 import type { CartSummary } from '@taste-labs/db';
@@ -67,16 +68,47 @@ function wooToCard(p: WooProduct): ProductCard {
   };
 }
 
+/** Get language from the last assistant (bot) message. */
+function getLastAssistantLanguage(history: { role: string; content: string }[]): DetectedLanguage | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== 'assistant') continue;
+    const content = (history[i].content ?? '').trim();
+    if (content.length === 0) continue;
+    return detectLanguage(content);
+  }
+  return null;
+}
+
+/** Get language from the last user message that is not numbers-only (e.g. "5" after "רגילה במחיר" → use Hebrew). */
+function getLastUserLanguage(history: { role: string; content: string }[]): DetectedLanguage | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== 'user') continue;
+    const content = history[i].content.replace(/^\[LANGUAGE:\s*[^\]]+\]\s*\n?/i, '').trim();
+    if (content.length === 0 || isNumbersOnly(content)) continue;
+    if (/^\[LANGUAGE:\s*he\]/i.test(history[i].content)) return 'he';
+    if (/^\[LANGUAGE:\s*en\]/i.test(history[i].content)) return 'en';
+    return detectLanguage(content);
+  }
+  return null;
+}
+
 export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult> {
   const { userMessage, conversationHistory, systemPromptContext, toolContext } = input;
   const openai = getOpenAI();
   const model = getModel();
 
-  // M2: Detect language and tag the user message
-  const detectedLang = detectLanguage(userMessage);
-  const taggedMessage = tagMessageWithLanguage(userMessage);
+  // M2: When input is numbers-only, use the last user message that had text (so "5" after "רגילה במחיר" → Hebrew).
+  //     Fallback to last assistant, then default Hebrew.
+  const lastLang = isNumbersOnly(userMessage)
+    ? (getLastUserLanguage(conversationHistory) ?? getLastAssistantLanguage(conversationHistory) ?? 'he')
+    : null;
+  const detectedLang = lastLang ?? detectLanguage(userMessage);
+  const taggedMessage = tagMessageWithLanguage(userMessage, lastLang);
 
-  const systemPrompt = buildSystemPrompt(systemPromptContext);
+  const systemPrompt = buildSystemPrompt({
+    ...systemPromptContext,
+    replyLanguage: detectedLang,
+  });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
