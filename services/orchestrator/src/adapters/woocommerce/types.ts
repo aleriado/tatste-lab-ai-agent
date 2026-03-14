@@ -81,8 +81,23 @@ export interface WooVariation {
   inStock?: boolean;
 }
 
+export type SearchProductsMeta = {
+  products: WooProduct[];
+  matchType: 'exact' | 'related';
+  reason?: string;
+};
+
+export type SearchFilters = {
+  category?: string;
+  limit?: number;
+  maxPrice?: number;
+  minPrice?: number;
+};
+
 export interface WooCommerceAdapter {
-  searchProducts(query: string, filters?: { category?: string; limit?: number }): Promise<WooProduct[]>;
+  searchProducts(query: string, filters?: SearchFilters): Promise<WooProduct[]>;
+  /** When implemented (e.g. HubSpot), returns products plus matchType and reason so the bot can explain "no exact match; here are related products and why." */
+  searchProductsWithMeta?(query: string, filters?: SearchFilters): Promise<SearchProductsMeta>;
   getProduct(productId: string): Promise<WooProduct | null>;
   getProductVariations(productId: string): Promise<WooVariation[]>;
   getRelatedProducts(productId: string, options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]>;

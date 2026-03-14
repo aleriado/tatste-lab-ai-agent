@@ -3,7 +3,7 @@
  * Use when INTEGRATION_MODE_WOO=rest. Requires Woo REST credentials in env.
  */
 
-import type { WooCommerceAdapter, WooProduct, WooVariation } from './types';
+import type { WooCommerceAdapter, WooProduct, WooVariation, SearchProductsMeta } from './types';
 import {
   getHubSpotProduct,
   searchHubSpotProducts
@@ -216,24 +216,40 @@ export function createRestWooAdapter(): WooCommerceAdapter {
     });
   }
 
+  function productPriceNum(p: WooProduct): number {
+    const raw = p.price ?? p.retailPrice ?? p.salePrice ?? '';
+    const n = parseFloat(String(raw).replace(/,/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function applyPriceFilter(products: WooProduct[], maxPrice?: number, minPrice?: number): WooProduct[] {
+    if (maxPrice == null && minPrice == null) return products;
+    return products.filter((p) => {
+      const price = productPriceNum(p);
+      if (maxPrice != null && price > maxPrice) return false;
+      if (minPrice != null && price < minPrice) return false;
+      return true;
+    });
+  }
+
   return {
-    async searchProducts(query: string, filters?: { category?: string; limit?: number }): Promise<WooProduct[]> {
-      const cacheKey = `search:${query}:${filters?.category ?? ''}:${filters?.limit ?? 200}`;
+    async searchProducts(query: string, filters?: { category?: string; limit?: number; maxPrice?: number; minPrice?: number }): Promise<WooProduct[]> {
+      const cacheKey = `search:${query}:${filters?.category ?? ''}:${filters?.limit ?? 200}:${filters?.maxPrice ?? ''}:${filters?.minPrice ?? ''}`;
       return cached(cacheKey, async () => {
         const source = getProductSource();
         const limit = filters?.limit ?? 200;
         if (source === 'hubspot') {
-          const hubspotProducts = await searchHubSpotProducts(query, limit);
+          const result = await searchHubSpotProducts(query, limit);
+          const hubspotProducts = result.products;
           logInfo(`HubSpot product search: fetched ${hubspotProducts.length} products`, { query, limit });
-          // STRICT: Filter to ensure only HubSpot-sourced products
           const strictHubSpotOnly = hubspotProducts.filter((p) => p.metadata?.source === 'hubspot');
           if (strictHubSpotOnly.length !== hubspotProducts.length) {
-            logInfo(`Filtered out ${hubspotProducts.length - strictHubSpotOnly.length} non-HubSpot products`, { 
-              total: hubspotProducts.length, 
-              hubspotOnly: strictHubSpotOnly.length 
+            logInfo(`Filtered out ${hubspotProducts.length - strictHubSpotOnly.length} non-HubSpot products`, {
+              total: hubspotProducts.length,
+              hubspotOnly: strictHubSpotOnly.length
             });
           }
-          const byCategory = filters?.category
+          let byCategory = filters?.category
             ? strictHubSpotOnly.filter((p) =>
                 (p.categories ?? []).some(
                   (c) =>
@@ -242,6 +258,7 @@ export function createRestWooAdapter(): WooCommerceAdapter {
                 )
               )
             : strictHubSpotOnly;
+          byCategory = applyPriceFilter(byCategory, filters?.maxPrice, filters?.minPrice);
           logInfo(`Returning ${byCategory.length} HubSpot products after filtering`, { query, limit });
           return byCategory.slice(0, limit);
         }
@@ -257,14 +274,41 @@ export function createRestWooAdapter(): WooCommerceAdapter {
           if (filters?.category) params.category = filters.category;
 
           const data = await wooFetch<any[]>('/products', params);
-          const products = (Array.isArray(data) ? data : []).map(normalizeProduct);
+          let products = (Array.isArray(data) ? data : []).map(normalizeProduct);
+          products = applyPriceFilter(products, filters?.maxPrice, filters?.minPrice);
           logInfo(`Returning ${products.length} WooCommerce products`, { query, limit });
-          return products;
+          return products.slice(0, limit);
         } catch (err) {
           logError('Woo REST searchProducts failed', err);
           return [];
         }
       });
+    },
+
+    async searchProductsWithMeta(query: string, filters?: { category?: string; limit?: number; maxPrice?: number; minPrice?: number }): Promise<SearchProductsMeta> {
+      const source = getProductSource();
+      const limit = filters?.limit ?? 200;
+      if (source === 'hubspot') {
+        const result = await searchHubSpotProducts(query, limit);
+        let strictHubSpotOnly = result.products.filter((p) => p.metadata?.source === 'hubspot');
+        strictHubSpotOnly = applyPriceFilter(strictHubSpotOnly, filters?.maxPrice, filters?.minPrice);
+        const byCategory = filters?.category
+          ? strictHubSpotOnly.filter((p) =>
+              (p.categories ?? []).some(
+                (c) =>
+                  c.name.toLowerCase() === filters.category!.toLowerCase() ||
+                  String(c.id) === filters.category
+              )
+            )
+          : strictHubSpotOnly;
+        return {
+          products: byCategory.slice(0, limit),
+          matchType: result.matchType,
+          reason: result.reason,
+        };
+      }
+      const products = await this.searchProducts(query, filters);
+      return { products, matchType: 'exact' };
     },
 
     async getProduct(productId: string): Promise<WooProduct | null> {
@@ -323,7 +367,7 @@ export function createRestWooAdapter(): WooCommerceAdapter {
             const pool: WooProduct[] = [];
             const seen = new Set<string>();
             for (const q of queries) {
-              const batch = await searchHubSpotProducts(q, 24);
+              const { products: batch } = await searchHubSpotProducts(q, 24);
               for (const p of batch) {
                 if (!p?.id) continue;
                 if (seen.has(p.id)) continue;

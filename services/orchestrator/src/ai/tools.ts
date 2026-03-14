@@ -5,12 +5,14 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'product_search',
-      description: 'Search the Taste Labs product catalog. Use when user asks for recommendations, mentions a product type, or wants to browse. Pass an empty string "" as query to get all available products.',
+      description: 'Search the Taste Labs product catalog. First matches by product name (and ranks by color/origin/taste in description if given). If no exact match, may return related products with matchType "related" and a "reason". Use when user asks for recommendations, a product type, or to browse. When the user asks for "products under X ILS" or "below X" or "cheaper than X", pass maxPrice: X so only products at or below that price are returned.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Search query (e.g. "שמן", "pasta", "oil"). Use empty string "" to list all products.' },
-          limit: { type: 'number', description: 'Max results to return. Use 100-200 for recommendations/browse. Default 200. Never use less than 50 for catalog browse.' }
+          limit: { type: 'number', description: 'Max results to return. Use 100-200 for recommendations/browse. Default 200.' },
+          maxPrice: { type: 'number', description: 'Optional. Only return products with price (ILS) at or below this value. Use when user says "under X ILS", "below X", "cheaper than X".' },
+          minPrice: { type: 'number', description: 'Optional. Only return products with price (ILS) at or above this value.' }
         },
         required: ['query']
       }

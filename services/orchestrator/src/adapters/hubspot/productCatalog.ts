@@ -169,12 +169,156 @@ function getFirstFromProps(p: Record<string, string | null | undefined>, keys: s
   return undefined;
 }
 
+/** Words we do not require in product text when doing similar search (e.g. "tasty yellow sauce" → match on yellow + sauce only). */
+const SEARCH_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'to', 'for', 'and', 'or', 'but', 'in', 'on', 'at', 'by', 'with',
+  'i', 'want', 'wanna', 'buy', 'get', 'need', 'like', 'some', 'any', 'something',
+  'tasty', 'good', 'nice', 'great', 'delicious', 'yummy', 'yum', 'best', 'really',
+  'please', 'maybe', 'just', 'very', 'so', 'is', 'it', 'me', 'my', 'have', 'has'
+]);
+
+/** Common English → Hebrew (and vice versa) for product search. "sauce" includes רוטב and מחית (puree/paste) so "yellow sauce" matches מחית עגבניות צהובות. */
+const SEARCH_TERM_EQUIVALENTS: Record<string, string[]> = {
+  yellow: ['צהוב', 'צהובות', 'yellow'],
+  sauce: ['רוטב', 'מחית', 'sauce'], // מחית = puree/paste, used like sauce (e.g. מחית עגבניות צהובות)
+  red: ['אדום', 'red'],
+  green: ['ירוק', 'green'],
+  pesto: ['פסטו', 'pesto'],
+  tomato: ['עגבניה', 'עגבניות', 'tomato'],
+  basil: ['בזיליקום', 'basil'],
+  olive: ['זית', 'זיתים', 'olive'],
+  oil: ['שמן', 'oil'],
+  pasta: ['פסטה', 'pasta'],
+  spread: ['ממרח', 'spread'],
+  cheese: ['גבינה', 'גבינות', 'cheese'],
+  spicy: ['חריף', 'חריפה', 'spicy'],
+  hot: ['חריף', 'hot'],
+  sweet: ['מתוק', 'מתוקה', 'sweet'],
+  flavorful: ['עם טעם', 'טעים'],
+  // Origin / country (for multi-property search)
+  italian: ['איטליה', 'איטלקי', 'italian', 'italy'],
+  italy: ['איטליה', 'italy'],
+  israel: ['ישראל', 'israel'],
+  france: ['צרפת', 'france'],
+  spain: ['ספרד', 'spain'],
+  greece: ['יוון', 'greece'],
+};
+
+function getSearchTermVariants(term: string): string[] {
+  const t = term.trim().toLowerCase();
+  if (!t) return [];
+  const equiv = SEARCH_TERM_EQUIVALENTS[t];
+  if (equiv) return [...new Set(equiv)];
+  return [term.trim()];
+}
+
+/** True if string contains Hebrew characters. */
+function hasHebrew(s: string): boolean {
+  return /[\u0590-\u05FF]/.test(s);
+}
+
+/** Prefer Hebrew variant for HubSpot search. HubSpot product properties (name, description, etc.) are in Hebrew. */
+function toHebrewSearchTerm(term: string): string {
+  const variants = getSearchTermVariants(term);
+  const hebrew = variants.find(hasHebrew);
+  return (hebrew || variants[0] || term).trim();
+}
+
+/** Translate user query to Hebrew for HubSpot search. User asks in English → we translate → search HubSpot (properties are in Hebrew). E.g. "yellow sauce" → "צהוב רוטב". */
+function toHebrewSearchQuery(query: string): string {
+  const terms = query.trim().split(/\s+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const hebrewTerms = terms.map(toHebrewSearchTerm);
+  return hebrewTerms.join(' ');
+}
+
+/** Strip HTML tags to get plain text for search. */
+function stripHtml(html: string | null | undefined): string {
+  if (html == null) return '';
+  return String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Combined searchable text from all HubSpot text properties: name, descriptions, producer (tywr_yzrn). */
+function productSearchableText(p: WooProduct): string {
+  const parts = [
+    p.name ?? '',
+    p.shortDescription ?? '',
+    p.detailedDescription ?? '',
+    p.description ?? '',
+    (p.metadata && typeof p.metadata.producerDescription === 'string') ? p.metadata.producerDescription : ''
+  ].map((s) => stripHtml(s));
+  return parts.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Terms that must appear in product text; skip stop words (e.g. "tasty", "buy") so "tasty yellow sauce" matches on yellow + sauce. */
+function contentTermsForSimilarSearch(terms: string[]): string[] {
+  const content = terms
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t && !SEARCH_STOP_WORDS.has(t));
+  return content.length > 0 ? content : terms;
+}
+
+/** Terms that describe product type (what the product IS). For these we require match in product name so "pasta" does not return pesto spread (which only mentions pasta in description). */
+const PRODUCT_TYPE_TERMS = new Set([
+  'pasta', 'sauce', 'spread', 'pesto', 'oil', 'cheese', 'tomato', 'paste', 'puree',
+  'פסטה', 'רוטב', 'ממרח', 'פסטו', 'שמן', 'גבינה', 'עגבניה', 'מחית'
+]);
+
+/** When there is no exact match for a product type, recommend these related terms (e.g. for "pasta" → sauces/spreads that go with pasta). */
+const RELATED_TERMS_FOR_PRODUCT_TYPE: Record<string, { terms: string[]; reasonEn: string; reasonHe: string }> = {
+  pasta: {
+    terms: ['פסטו', 'רוטב', 'ממרח', 'pesto', 'sauce', 'spread'],
+    reasonEn: 'No pasta in the catalog; showing sauces and spreads that go well with pasta.',
+    reasonHe: 'אין פסטה בקטלוג; הנה רטבים וממרחים שמתאימים לפסטה.',
+  },
+  sauce: {
+    terms: ['ממרח', 'רוטב', 'מחית', 'spread', 'paste', 'puree'],
+    reasonEn: 'No sauce matching your request; showing related spreads and purees.',
+    reasonHe: 'אין רוטב שמתאים; הנה ממרחים ומחיות דומים.',
+  },
+  pesto: {
+    terms: ['רוטב', 'ממרח', 'sauce', 'spread'],
+    reasonEn: 'No pesto matching; showing related sauces and spreads.',
+    reasonHe: 'אין פסטו שמתאים; הנה רטבים וממרחים דומים.',
+  },
+};
+
+/** True if product NAME only contains the term or its variant. Used for product-type queries so "pasta" returns only products that ARE pasta (name contains פסטה/pasta), not sauces "for pasta" or in category "pasta sauces". */
+function productNameContainsTerm(product: WooProduct, term: string): boolean {
+  const nameOnly = (product.name ?? '').toLowerCase();
+  const variants = getSearchTermVariants(term);
+  return variants.some((v) => v && nameOnly.includes(v.toLowerCase()));
+}
+
+/** True if product name/description contains every term (or its Hebrew/English equivalent). */
+function productContainsAllTerms(product: WooProduct, terms: string[]): boolean {
+  const text = productSearchableText(product);
+  for (const term of terms) {
+    const variants = getSearchTermVariants(term);
+    const found = variants.some((v) => v && text.includes(v.toLowerCase()));
+    if (!found) return false;
+  }
+  return true;
+}
+
+/** Count how many of the given terms (or their variants) appear in the product text. Used to rank by "matching properties". */
+function productMatchScore(product: WooProduct, terms: string[]): number {
+  const text = productSearchableText(product);
+  let score = 0;
+  for (const term of terms) {
+    const variants = getSearchTermVariants(term);
+    if (variants.some((v) => v && text.includes(v.toLowerCase()))) score += 1;
+  }
+  return score;
+}
+
+/** HubSpot product property names (as in HubSpot CRM). Include all text fields used for search. */
 const PRODUCT_PROPERTIES = [
   'name',
   'description',
   'hs_rich_text_description',
   'short_description',
   'detailed_description',
+  'tywr_yzrn', // producer/origin rich text (Hebrew)
   'hs_sku',
   'hs_images',
   'hs_cost_of_goods_sold',
@@ -301,6 +445,10 @@ function mapHubSpotToWooProduct(
 
   const description = shortDescription ?? detailedDescription;
 
+  // Producer/origin rich text (tywr_yzrn) — include in searchable text
+  const producerRichText = firstNonEmpty([p.tywr_yzrn]);
+  const producerDescription = producerRichText ? stripHtml(producerRichText) : undefined;
+
   // inStock = same as purchasable: only hs_status matters. No in_stock/stock_status — avoid blocking active products.
   const inStock: boolean = !notPurchasableByStatus;
 
@@ -342,6 +490,7 @@ function mapHubSpotToWooProduct(
     metadata: {
       source: 'hubspot',
       hubspotProductId: raw.id,
+      producerDescription,
       sku,
       barcode: barcode ?? sku,
       costPrice,
@@ -402,9 +551,76 @@ async function getProductPropertyNames(): Promise<Set<string>> {
   }
 }
 
-export async function searchHubSpotProducts(query: string, limit: number): Promise<WooProduct[]> {
+/** Fetch products by HubSpot query (exact search only). Used for similar-search by term. */
+async function fetchHubSpotProductsByQuery(
+  trimmed: string,
+  desired: number,
+  descriptionProps: DescriptionPropertyNames,
+  propsStr: string
+): Promise<WooProduct[]> {
+  let results: HubSpotProductRecord[] = [];
+  const allPropsArr = propsStr.split(',');
+
+  if (!trimmed) {
+    let after: string | undefined;
+    while (results.length < desired) {
+      const pageLimit = Math.min(100, desired - results.length);
+      const response = await hubspotRequest<{
+        results?: HubSpotProductRecord[];
+        paging?: { next?: { after?: string } };
+      }>(
+        `/crm/v3/objects/products?limit=${pageLimit}&properties=${encodeURIComponent(propsStr)}${after ? `&after=${encodeURIComponent(after)}` : ''}`
+      );
+      const pageItems = response.results ?? [];
+      results.push(...pageItems);
+      after = response.paging?.next?.after;
+      if (!after || pageItems.length === 0) break;
+    }
+  } else {
+    let after: string | undefined;
+    while (results.length < desired) {
+      const pageLimit = Math.min(100, desired - results.length);
+      const response = await hubspotRequest<{
+        results?: HubSpotProductRecord[];
+        paging?: { next?: { after?: string } };
+      }>('/crm/v3/objects/products/search', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: trimmed,
+          limit: pageLimit,
+          after,
+          properties: allPropsArr
+        })
+      });
+      const pageItems = response.results ?? [];
+      results.push(...pageItems);
+      after = response.paging?.next?.after;
+      if (!after || pageItems.length === 0) break;
+    }
+  }
+
+  const mapped = results.map((r) => mapHubSpotToWooProduct(r, descriptionProps));
+  return mapped.filter((p) => {
+    const hasManufacturer = !!p.manufacturer;
+    const hasLogistics = !!p.unitsPerBox || !!p.boxesPerLayer || !!p.layersPerSurface;
+    return hasManufacturer || hasLogistics;
+  });
+}
+
+/**
+ * Search HubSpot products. User may ask in English (e.g. "yellow sauce"); we translate to Hebrew first,
+ * then search HubSpot — product properties (name, description, short/detailed description) are in Hebrew.
+ */
+export type HubSpotSearchResult = {
+  products: WooProduct[];
+  matchType: 'exact' | 'related';
+  reason?: string;
+};
+
+export async function searchHubSpotProducts(query: string, limit: number): Promise<HubSpotSearchResult> {
   const token = getProductToken();
-  if (!token) return [];
+  const emptyExact: HubSpotSearchResult = { products: [], matchType: 'exact' };
+  if (!token) return emptyExact;
 
   try {
     const descriptionProps = await getDescriptionPropertyNames();
@@ -418,66 +634,115 @@ export async function searchHubSpotProducts(query: string, limit: number): Promi
       1,
       Math.min(normalizedLimit, Number.isFinite(maxFetch) && maxFetch > 0 ? Math.floor(maxFetch) : 500)
     );
-    let results: HubSpotProductRecord[] = [];
 
-    if (!trimmed) {
-      let after: string | undefined;
-      while (results.length < desired) {
-        const pageLimit = Math.min(100, desired - results.length);
-        const response = await hubspotRequest<{
-          results?: HubSpotProductRecord[];
-          paging?: { next?: { after?: string } };
-        }>(
-          `/crm/v3/objects/products?limit=${pageLimit}&properties=${encodeURIComponent(propsStr)}${after ? `&after=${encodeURIComponent(after)}` : ''}`
-        );
-        const pageItems = response.results ?? [];
-        results.push(...pageItems);
-        after = response.paging?.next?.after;
-        if (!after || pageItems.length === 0) break;
-      }
-    } else {
-      let after: string | undefined;
-      while (results.length < desired) {
-        const pageLimit = Math.min(100, desired - results.length);
-        const response = await hubspotRequest<{
-          results?: HubSpotProductRecord[];
-          paging?: { next?: { after?: string } };
-        }>('/crm/v3/objects/products/search', {
-          method: 'POST',
-          body: JSON.stringify({
-            query: trimmed,
-            limit: pageLimit,
-            after,
-            properties: allProps
-          })
-        });
-        const pageItems = response.results ?? [];
-        results.push(...pageItems);
-        after = response.paging?.next?.after;
-        if (!after || pageItems.length === 0) break;
+    // Step 1: Translate user query (English) to Hebrew, then search HubSpot (properties are in Hebrew).
+    const hubspotQuery = toHebrewSearchQuery(trimmed) || trimmed;
+    let filtered = await fetchHubSpotProductsByQuery(hubspotQuery, desired, descriptionProps, propsStr);
+
+    // Post-filter: HubSpot may fuzzy-match (e.g. פסטה "pasta" → פסטו "pesto"). Keep only products that actually match. For product-type terms (pasta, sauce, etc.) require match in product name so we don't return "sauce for pasta" when user asked for "pasta".
+    if (trimmed && filtered.length > 0) {
+      const terms = trimmed.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      const contentTerms = contentTermsForSimilarSearch(terms);
+      if (contentTerms.length > 0) {
+        const isSingleProductType =
+          contentTerms.length === 1 && PRODUCT_TYPE_TERMS.has(contentTerms[0].toLowerCase());
+        const mustMatch = isSingleProductType
+          ? filtered.filter((p) => productNameContainsTerm(p, contentTerms[0]))
+          : filtered.filter((p) => productContainsAllTerms(p, contentTerms));
+        if (mustMatch.length > 0) filtered = mustMatch;
       }
     }
 
-    const mapped = results.map((r) => mapHubSpotToWooProduct(r, descriptionProps));
+    if (filtered.length > 0) {
+      logInfo('HubSpot product search success', { query, requestedLimit: desired, returned: filtered.length });
+      return { products: filtered, matchType: 'exact' };
+    }
 
-    // Filter out WooCommerce stub products that were imported into HubSpot without logistics data.
-    // These are identifiable by having a store_product_id but no manufacturer or logistics fields.
-    const filtered = mapped.filter((p) => {
-      const hasManufacturer = !!p.manufacturer;
-      const hasLogistics = !!p.unitsPerBox || !!p.boxesPerLayer || !!p.layersPerSurface;
-      return hasManufacturer || hasLogistics;
-    });
+    // Step 2 (similar search): Fetch by each property/term (color, origin, type, etc.), gather candidates, then filter and rank by how many properties match.
+    if (trimmed) {
+      const terms = trimmed.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+      const contentTerms = contentTermsForSimilarSearch(terms);
+      if (contentTerms.length === 0) {
+        logInfo('HubSpot product search: no results', { query });
+        return emptyExact;
+      }
+      const similarFetchLimit = Math.min(300, maxFetch);
+      const seenIds = new Set<string>();
+      const allCandidates: WooProduct[] = [];
+      const hebrewSearchTerms = [...new Set(
+        contentTerms.flatMap((t) => getSearchTermVariants(t).filter(hasHebrew)).filter(Boolean)
+      )];
+      for (const searchTerm of hebrewSearchTerms) {
+        const batch = await fetchHubSpotProductsByQuery(searchTerm, similarFetchLimit, descriptionProps, propsStr);
+        for (const p of batch) {
+          if (!seenIds.has(p.id)) {
+            seenIds.add(p.id);
+            allCandidates.push(p);
+          }
+        }
+      }
+      const isSingleProductType =
+        contentTerms.length === 1 && PRODUCT_TYPE_TERMS.has(contentTerms[0].toLowerCase());
+      const productTypeTerm = contentTerms.find((t) => PRODUCT_TYPE_TERMS.has(t.toLowerCase()));
+      let similar: WooProduct[];
+      if (contentTerms.length >= 2 && productTypeTerm) {
+        // Multi-property with product type (e.g. "red Italian pasta"): first keep only products whose NAME contains the product type, then rank by other attributes (color, origin, etc.) in description.
+        const nameMatches = allCandidates.filter((p) => productNameContainsTerm(p, productTypeTerm));
+        const withScore = (nameMatches.length > 0 ? nameMatches : allCandidates)
+          .map((p) => ({ p, score: productMatchScore(p, contentTerms) }))
+          .filter((x) => x.score >= 1)
+          .sort((a, b) => b.score - a.score);
+        similar = withScore.map((x) => x.p);
+      } else if (contentTerms.length >= 2) {
+        // Multi-property, no product type: rank by number of matching properties.
+        const withScore = allCandidates
+          .map((p) => ({ p, score: productMatchScore(p, contentTerms) }))
+          .filter((x) => x.score >= 1)
+          .sort((a, b) => b.score - a.score);
+        similar = withScore.map((x) => x.p);
+      } else if (isSingleProductType) {
+        similar = allCandidates.filter((p) => productNameContainsTerm(p, contentTerms[0]));
+      } else {
+        similar = allCandidates.filter((p) => productContainsAllTerms(p, contentTerms));
+      }
+      if (similar.length > 0) {
+        logInfo('HubSpot similar search matched', { query: trimmed, contentTerms, matchCount: similar.length });
+        return { products: similar.slice(0, normalizedLimit), matchType: 'exact' };
+      }
 
-    logInfo('HubSpot product search success', {
-      query,
-      requestedLimit: desired,
-      returned: filtered.length,
-      filteredOut: mapped.length - filtered.length
-    });
-    return filtered;
+      // Step 3 (related fallback): No exact match. For single product-type queries (e.g. "pasta"), recommend related products (sauces, spreads) with a reason.
+      const relatedConfig = isSingleProductType ? RELATED_TERMS_FOR_PRODUCT_TYPE[contentTerms[0].toLowerCase()] : undefined;
+      if (relatedConfig) {
+        const relatedFetchLimit = Math.min(100, maxFetch);
+        const seenIds = new Set<string>();
+        const relatedCandidates: WooProduct[] = [];
+        const hebrewRelated = relatedConfig.terms.filter(hasHebrew);
+        for (const searchTerm of hebrewRelated) {
+          const batch = await fetchHubSpotProductsByQuery(searchTerm, relatedFetchLimit, descriptionProps, propsStr);
+          for (const p of batch) {
+            if (!seenIds.has(p.id)) {
+              seenIds.add(p.id);
+              relatedCandidates.push(p);
+            }
+          }
+        }
+        if (relatedCandidates.length > 0) {
+          const relatedSlice = relatedCandidates.slice(0, normalizedLimit);
+          logInfo('HubSpot related fallback', { query: trimmed, productType: contentTerms[0], count: relatedSlice.length });
+          return {
+            products: relatedSlice,
+            matchType: 'related',
+            reason: relatedConfig.reasonEn,
+          };
+        }
+      }
+    }
+
+    logInfo('HubSpot product search: no results', { query });
+    return emptyExact;
   } catch (err) {
     logError('HubSpot product search failed', err);
-    return [];
+    return emptyExact;
   }
 }
 

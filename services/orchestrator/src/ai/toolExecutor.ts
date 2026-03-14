@@ -116,10 +116,27 @@ export async function executeTool(
         Number.isFinite(requestedLimit) && requestedLimit > 0
           ? Math.floor(requestedLimit)
           : 200;
-      // For browse/recommendations (empty or short query), enforce minimum to avoid AI passing tiny limits (e.g. 5)
       const isBrowse = !query.trim();
       if (isBrowse && normalizedLimit < 50) normalizedLimit = 100;
-      const products = await woo.searchProducts(query, { limit: normalizedLimit });
+      const maxPrice = Number(args.maxPrice);
+      const minPrice = Number(args.minPrice);
+      const filters = {
+        limit: normalizedLimit,
+        ...(Number.isFinite(maxPrice) && maxPrice >= 0 && { maxPrice }),
+        ...(Number.isFinite(minPrice) && minPrice >= 0 && { minPrice }),
+      };
+      if (typeof woo.searchProductsWithMeta === 'function') {
+        const meta = await woo.searchProductsWithMeta(query, filters);
+        return {
+          data: {
+            products: meta.products,
+            matchType: meta.matchType,
+            reason: meta.reason,
+          },
+          products: meta.products,
+        };
+      }
+      const products = await woo.searchProducts(query, filters);
       return { data: products, products };
     }
 
