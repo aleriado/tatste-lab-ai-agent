@@ -35,7 +35,35 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
     }
   }, [loading]);
 
-  const addText = `Add ${product.name} to cart [productId:${product.id}]`;
+  const addText = `Purchase ${product.name} [productId:${product.id}]`;
+  const normalizedType = (product.type ?? "").toLowerCase();
+  const isDigital = /download|digital|להורדה/.test(normalizedType) || product.isDownloadable;
+  const moqBoxes = product.boxesPerLayer ?? product.boxesPerSurface;
+
+  const specRows: Array<{ label: string; value?: string | number | boolean }> = [
+    { label: t.manufacturer, value: product.manufacturer },
+    { label: t.brand, value: product.brand },
+    { label: t.countryOfOrigin, value: product.countryOfOrigin },
+    { label: t.sku, value: product.sku },
+    { label: t.barcode, value: product.barcode },
+    { label: t.weight, value: product.weight },
+    { label: t.stockUnits, value: product.inventory },
+    ...(!isDigital
+      ? [
+          { label: t.unitsPerBox, value: product.unitsPerBox },
+          { label: t.boxesPerLayer, value: product.boxesPerLayer },
+          { label: t.layersPerSurface, value: product.layersPerSurface },
+          { label: t.boxesPerSurface, value: product.boxesPerSurface },
+          { label: t.moqBoxes, value: moqBoxes }
+        ]
+      : [])
+  ];
+
+  const displayValue = (value?: string | number | boolean): string => {
+    if (value === undefined || value === null) return t.notAvailable;
+    const text = String(value).trim();
+    return text.length > 0 ? text : t.notAvailable;
+  };
 
   const handleAdd = () => {
     if (loading || disabled || addGuardRef.current) return;
@@ -64,7 +92,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
               type="button"
               disabled={disabled || loading}
             >
-              {loading ? <span className="btn-spinner" /> : t.addToCart}
+              {loading ? <span className="btn-spinner" /> : t.purchase}
             </button>
             <button
               className="product-action-btn detail"
@@ -97,12 +125,25 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
                   {product.inStock ? t.inStock : t.outOfStock}
                 </div>
               )}
-              {product.description && (
-                <div className="modal-description">{product.description}</div>
+              {(product.detailedDescription ?? product.description ?? product.shortDescription) && (
+                <div
+                  className="modal-description"
+                  dangerouslySetInnerHTML={{
+                    __html: product.detailedDescription ?? product.description ?? product.shortDescription ?? ''
+                  }}
+                />
               )}
-              {!product.description && product.shortDescription && (
-                <div className="modal-description">{product.shortDescription}</div>
-              )}
+              <div className="modal-specs">
+                <div className="modal-specs-title">{t.productSpec}</div>
+                <div className="modal-specs-grid">
+                  {specRows.map((row) => (
+                    <div key={row.label} className="modal-spec-row">
+                      <span className="modal-spec-label">{row.label}</span>
+                      <span className="modal-spec-value">{displayValue(row.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <button
                 className="modal-add-btn"
                 onClick={() => {
@@ -114,7 +155,7 @@ export default function ProductCard({ product, index, onAction, disabled, loadin
                 type="button"
                 disabled={disabled || loading}
               >
-                {t.addToCart}
+                {t.purchase}
               </button>
             </div>
           </div>

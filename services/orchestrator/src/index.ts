@@ -51,13 +51,39 @@ app.use((req, res, next) => {
   return next();
 });
 
+const contextMetadataSchema = z.object({
+  currentPage: z.enum(['catalog', 'product_detail', 'cart', 'checkout', 'group_orders', 'profile']),
+  product: z.object({
+    id: z.string(),
+    name: z.string(),
+    manufacturer: z.string(),
+    state: z.enum(['ACTIVE_IMPORTED', 'CATALOG_EXTENSION']),
+    pricingTiers: z.object({
+      retail: z.string().optional(),
+      wholesale: z.string().optional(),
+      importPerSurface: z.string().optional(),
+      importPer2Boxes: z.string().optional(),
+    }),
+    dreamStage: z.string().optional(),
+  }).optional(),
+  activeGroupOrder: z.object({
+    code: z.string(),
+    manufacturer: z.string(),
+    progress: z.number(),
+    participantCount: z.number(),
+    daysLeft: z.number(),
+  }).optional(),
+  userType: z.enum(['private_consumer', 'retailer']),
+}).optional();
+
 const inboundSchema = z.object({
   channel: z.enum(['web', 'whatsapp', 'telegram']),
   channel_user_id: z.string().min(1),
   text: z.string().min(1),
   email: z.string().email().optional(),
   phone: z.string().optional(),
-  groupOrderCode: z.string().optional()
+  groupOrderCode: z.string().optional(),
+  contextMetadata: contextMetadataSchema,
 });
 
 function toPrismaChannel(channel: 'web' | 'whatsapp' | 'telegram'): Channel {
@@ -130,17 +156,33 @@ app.post('/api/message', async (req, res) => {
           content: m.text!
         }));
 
+      // M2: Build session context for intervention gates and anti-spam
+      const contextMetadata = payload.contextMetadata ?? undefined;
+      const sessionContext = {
+        sessionId: thread.id,
+        customerId: customer.id,
+        userType: (contextMetadata?.userType ?? 'private_consumer') as 'private_consumer' | 'retailer',
+        currentPage: contextMetadata?.currentPage ?? 'catalog',
+        shareSuggestionsCount: 0,
+        shareSuggestionsPerPage: {} as Record<string, number>,
+        activeGroupOrders: contextMetadata?.activeGroupOrder ? [contextMetadata.activeGroupOrder.code] : [],
+        activeImportOrders: [] as string[],
+      };
+
       const result = await runChatLoop({
         userMessage: payload.text,
         conversationHistory,
         systemPromptContext: {
           cart: cartSummary,
           groupOrderCode: payload.groupOrderCode ?? null,
-          customerPreferences: (customer.preferencesJson as Record<string, unknown>) ?? null
+          customerPreferences: (customer.preferencesJson as Record<string, unknown>) ?? null,
+          contextMetadata: contextMetadata ?? null,
+          sessionContext,
         },
         toolContext: {
           customerId: customer.id,
-          traceId
+          traceId,
+          sessionContext,
         }
       });
 
@@ -161,7 +203,8 @@ app.post('/api/message', async (req, res) => {
             cards: result.cards?.length ?? 0,
             hasCart: !!result.cart,
             hasLink: !!result.link,
-            hasGroupOrder: !!result.groupOrder
+            hasGroupOrder: !!result.groupOrder,
+            hasImportOrder: !!result.importOrder,
           }
         })
       ]);
@@ -181,7 +224,8 @@ app.post('/api/message', async (req, res) => {
         cart: result.cart,
         suggestions: result.suggestions,
         link: result.link,
-        groupOrder: result.groupOrder
+        groupOrder: result.groupOrder,
+        importOrder: result.importOrder,
       };
     } else {
       // ── Legacy: rule-based fallback (M1 behavior) ──
@@ -300,15 +344,19 @@ app.listen(port, () => {
 /**
  * Infer intent from user text and AI result for CRM/logging purposes.
  */
-function inferIntent(text: string, result: { cards?: unknown[]; cart?: unknown; link?: unknown; groupOrder?: unknown }): string {
+function inferIntent(text: string, result: { cards?: unknown[]; cart?: unknown; link?: unknown; groupOrder?: unknown; importOrder?: unknown }): string {
   const lower = text.toLowerCase();
   if (result.link) return 'CHECKOUT_INTENT';
+  if (result.importOrder) return 'IMPORT_ORDER';
   if (result.groupOrder) return 'GROUP_ORDER';
   if (result.cart) return 'ADD_TO_CART';
   if (result.cards && (result.cards as any[]).length > 0) return 'RECOMMEND';
   if (/checkout|pay/i.test(lower)) return 'CHECKOUT_INTENT';
+  if (/import|ייבוא/i.test(lower)) return 'IMPORT_ORDER';
   if (/\badd\b/i.test(lower)) return 'ADD_TO_CART';
-  if (/cart/i.test(lower)) return 'VIEW_CART';
-  if (/group|join/i.test(lower)) return 'GROUP_ORDER';
+  if (/cart|עגלה/i.test(lower)) return 'VIEW_CART';
+  if (/group|join|קבוצ/i.test(lower)) return 'GROUP_ORDER';
+  if (/status|סטטוס|מצב הזמנה/i.test(lower)) return 'ORDER_STATUS';
+  if (/dream|חלום/i.test(lower)) return 'DREAM_LIST';
   return 'GENERAL';
 }

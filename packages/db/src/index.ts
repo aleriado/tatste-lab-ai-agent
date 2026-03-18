@@ -1,12 +1,34 @@
 import { PrismaClient, IntegrationProvider } from '@prisma/client';
 import type { Channel, MessageDirection, Customer, Thread, Cart, CartItem, GroupOrderStatus } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { getGroupOrderConfig } from './groupOrder/config';
+import { recalcMoq as recalcMoqFromRepo } from './groupOrder/repository';
 
 // Prisma client singleton
 const prisma = new PrismaClient();
 
 export { prisma, IntegrationProvider };
 export type { Channel, MessageDirection, Customer, Thread };
+
+// ─── Group Order (New Algorithm) ───
+export { addItemToGroupOrder } from './groupOrder/service';
+export type { AddItemToGroupOrderInput, AddItemToGroupOrderResult } from './groupOrder/service';
+export { recalcMoq, ensureParticipant } from './groupOrder/repository';
+
+// ─── Import Order Service ───
+export {
+  createImportOrder,
+  getOpenImportOrders,
+  addItemToImportOrder,
+  getImportOrderStatus,
+  checkoutImportOrder,
+} from './groupOrder/importOrderService';
+export type {
+  ImportOrderStatus,
+  AddItemToImportOrderResult,
+  AddItemToImportOrderPricing,
+  CheckoutResult,
+} from './groupOrder/importOrderService';
 
 // ─── Customer & Identity ───
 
@@ -167,9 +189,12 @@ export async function upsertCrmLink(params: {
 
 export type CartWithItems = Cart & { items: CartItem[] };
 
+export type CartItemOrderType = 'regular' | 'stock';
+
 export interface AddCartItemInput {
   productId: string;
   variantId?: string | null;
+  orderType?: CartItemOrderType;
   name: string;
   imageUrl?: string | null;
   unitPrice: number;
@@ -182,6 +207,8 @@ export interface CartSummary {
     id: string;
     productId: string;
     variantId: string | null;
+    orderType: string;
+    orderTypeLabel: string;
     name: string;
     imageUrl: string | null;
     unitPrice: string;
@@ -205,40 +232,60 @@ export async function getOrCreateCart(customerId: string): Promise<CartWithItems
   return prisma.cart.findUniqueOrThrow({ where: { id: cart.id }, include: { items: true } });
 }
 
+const CART_ORDER_TYPE_MAP = { regular: 'REGULAR' as const, stock: 'STOCK' as const };
+
 export async function addCartItem(customerId: string, input: AddCartItemInput): Promise<CartWithItems> {
   const cart = await ensureCart(customerId);
   const qty = input.quantity ?? 1;
+  const orderType = input.orderType ?? 'regular';
+  const orderTypeDb = CART_ORDER_TYPE_MAP[orderType];
 
   // Safety: reject invalid prices
   if (isNaN(input.unitPrice) || input.unitPrice < 0) {
     throw new Error(`Invalid unit price: ${input.unitPrice}`);
   }
 
-  const existing = input.variantId
-    ? await prisma.cartItem.findUnique({
-        where: { cartId_productId_variantId: { cartId: cart.id, productId: input.productId, variantId: input.variantId } }
-      })
-    : await prisma.cartItem.findFirst({
-        where: { cartId: cart.id, productId: input.productId, variantId: null }
-      });
+  const variantIdVal = input.variantId ?? null;
+  // When variantId is null, findUnique rejects it (Prisma compound unique). Use findFirst for null variant.
+  const existing =
+    variantIdVal != null
+      ? await prisma.cartItem.findUnique({
+          where: {
+            cartId_productId_variantId_orderType: {
+              cartId: cart.id,
+              productId: input.productId,
+              variantId: variantIdVal,
+              orderType: orderTypeDb,
+            },
+          },
+        })
+      : await prisma.cartItem.findFirst({
+          where: {
+            cartId: cart.id,
+            productId: input.productId,
+            variantId: null,
+            orderType: orderTypeDb,
+          },
+        });
 
   if (existing) {
     await prisma.cartItem.update({
       where: { id: existing.id },
-      data: { quantity: existing.quantity + qty, unitPrice: new Decimal(input.unitPrice), name: input.name, imageUrl: input.imageUrl ?? existing.imageUrl }
+      data: { quantity: existing.quantity + qty, unitPrice: new Decimal(input.unitPrice), name: input.name, imageUrl: input.imageUrl ?? existing.imageUrl },
     });
   } else {
     await prisma.cartItem.create({
       data: {
         cartId: cart.id,
         productId: input.productId,
-        variantId: input.variantId ?? undefined,
+        variantId: variantIdVal,
+        orderType: orderTypeDb,
         name: input.name,
         imageUrl: input.imageUrl ?? null,
         unitPrice: new Decimal(input.unitPrice),
         quantity: qty,
-        metadata: (input.metadata ?? null) as any
-      }
+        metadata: (input.metadata ?? null) as any,
+      },
     });
   }
 
@@ -246,20 +293,44 @@ export async function addCartItem(customerId: string, input: AddCartItemInput): 
 }
 
 export async function updateCartItemQty(
-  customerId: string, productId: string, quantity: number, variantId?: string | null
+  customerId: string,
+  productId: string,
+  quantity: number,
+  variantId?: string | null,
+  orderType?: CartItemOrderType
 ): Promise<CartWithItems> {
   const cart = await ensureCart(customerId);
+  const orderTypeDb = orderType != null ? CART_ORDER_TYPE_MAP[orderType] : undefined;
+  const where = {
+    cartId: cart.id,
+    productId,
+    variantId: variantId ?? null,
+    orderType: orderTypeDb ?? 'REGULAR',
+  };
   if (quantity <= 0) {
-    await prisma.cartItem.deleteMany({ where: { cartId: cart.id, productId, variantId: variantId ?? null } });
+    await prisma.cartItem.deleteMany({ where });
   } else {
-    await prisma.cartItem.updateMany({ where: { cartId: cart.id, productId, variantId: variantId ?? null }, data: { quantity } });
+    await prisma.cartItem.updateMany({ where, data: { quantity } });
   }
   return prisma.cart.findUniqueOrThrow({ where: { id: cart.id }, include: { items: true } });
 }
 
-export async function removeCartItem(customerId: string, productId: string, variantId?: string | null): Promise<CartWithItems> {
+export async function removeCartItem(
+  customerId: string,
+  productId: string,
+  variantId?: string | null,
+  orderType?: CartItemOrderType
+): Promise<CartWithItems> {
   const cart = await ensureCart(customerId);
-  await prisma.cartItem.deleteMany({ where: { cartId: cart.id, productId, variantId: variantId ?? null } });
+  const orderTypeDb = orderType != null ? CART_ORDER_TYPE_MAP[orderType] : undefined;
+  await prisma.cartItem.deleteMany({
+    where: {
+      cartId: cart.id,
+      productId,
+      variantId: variantId ?? null,
+      ...(orderTypeDb != null && { orderType: orderTypeDb }),
+    },
+  });
   return prisma.cart.findUniqueOrThrow({ where: { id: cart.id }, include: { items: true } });
 }
 
@@ -269,20 +340,35 @@ export async function clearCart(customerId: string): Promise<CartWithItems> {
   return prisma.cart.findUniqueOrThrow({ where: { id: cart.id }, include: { items: true } });
 }
 
+function orderTypeLabel(orderType: string): string {
+  return orderType === 'STOCK' ? 'Stock' : 'Regular';
+}
+
 export function computeCartSummary(cart: CartWithItems): CartSummary {
   const items = cart.items.map((item) => {
     const price = Number(item.unitPrice);
     const lineTotal = price * item.quantity;
+    const ot = item.orderType;
     return {
-      id: item.id, productId: item.productId, variantId: item.variantId,
-      name: item.name, imageUrl: item.imageUrl,
-      unitPrice: price.toFixed(2), quantity: item.quantity, lineTotal: lineTotal.toFixed(2)
+      id: item.id,
+      productId: item.productId,
+      variantId: item.variantId,
+      orderType: ot,
+      orderTypeLabel: orderTypeLabel(ot),
+      name: item.name,
+      imageUrl: item.imageUrl,
+      unitPrice: price.toFixed(2),
+      quantity: item.quantity,
+      lineTotal: lineTotal.toFixed(2),
     };
   });
   const subtotal = items.reduce((sum, i) => sum + Number(i.lineTotal), 0);
   return {
-    items, subtotal: subtotal.toFixed(2), total: subtotal.toFixed(2),
-    currency: cart.currency, itemCount: items.reduce((sum, i) => sum + i.quantity, 0)
+    items,
+    subtotal: subtotal.toFixed(2),
+    total: subtotal.toFixed(2),
+    currency: cart.currency,
+    itemCount: items.reduce((sum, i) => sum + i.quantity, 0),
   };
 }
 
@@ -294,7 +380,10 @@ export interface GroupOrderFull {
   status: GroupOrderStatus;
   moqTarget: number;
   moqCurrent: number;
-  manufacturerId: string | null;
+  moqSurfaces: number;
+  surfaceMaxLayers: number | null;
+  /** Manufacturer name (stored in DB as manufacturerId column) */
+  manufacturer: string | null;
   expiresAt: Date | null;
   createdByCustomerId: string;
   participants: { customerId: string; createdAt: Date }[];
@@ -312,6 +401,26 @@ export interface GroupOrderFull {
       openedLayers: number;
     }[];
   };
+  surfaces?: {
+    surfaceIndex: number;
+    maxLayers: number;
+    status: string;
+    layers: {
+      layerIndex: number;
+      productId: string;
+      productName: string;
+      unitPrice?: string;
+      variantId: string | null;
+      capacityBoxes: number;
+      capacityUnits: number;
+      filledBoxes: number;
+      filledUnits: number;
+      status: string;
+    }[];
+  }[];
+  participantCosts?: { customerId: string; total: string; products: { name: string; units: number; cost: string }[] }[];
+  /** True when this is a single-user import order (same model as group order, maxParticipants=1). */
+  isImport?: boolean;
 }
 
 export interface AddGroupOrderItemInput {
@@ -325,20 +434,24 @@ export interface AddGroupOrderItemInput {
 }
 
 interface GroupOrderItemRuleMetadata {
-  manufacturerId?: string;
-  manufacturerName?: string;
+  manufacturer?: string;
   boxesPerLayer?: number;
 }
 
 export interface DiscoverableGroupOrder {
   code: string;
   status: GroupOrderStatus;
-  manufacturerId: string | null;
+  /** Manufacturer name (stored in DB as manufacturerId column) */
+  manufacturer: string | null;
   moqTarget: number;
   moqCurrent: number;
   remainingToTarget: number;
   participantCount: number;
   expiresAt: Date | null;
+  /** Number of surfaces opened (may be partial/incomplete) */
+  surfacesOpened: number;
+  /** Total boxes filled across all surfaces */
+  totalBoxesFilled: number;
 }
 
 export interface DeleteGroupOrderResult {
@@ -354,84 +467,6 @@ function generateGroupCode(): string {
   return code;
 }
 
-async function recalcMoq(groupOrderId: string): Promise<number> {
-  const go = await prisma.groupOrder.findUnique({
-    where: { id: groupOrderId },
-    include: {
-      items: {
-        select: {
-          productId: true,
-          variantId: true,
-          quantity: true,
-          metadata: true
-        }
-      }
-    }
-  });
-  if (!go) return 0;
-
-  const grouped = new Map<string, { productId: string; quantity: number; boxesPerLayer: number }>();
-  for (const item of go.items) {
-    const key = `${item.productId}:${item.variantId ?? ''}`;
-    const meta = ((item.metadata as GroupOrderItemRuleMetadata | null) ?? {});
-    const boxesPerLayerRaw = Number(meta.boxesPerLayer ?? 1);
-    const boxesPerLayer = Number.isFinite(boxesPerLayerRaw) && boxesPerLayerRaw > 0
-      ? Math.floor(boxesPerLayerRaw)
-      : 1;
-
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.quantity += item.quantity;
-    } else {
-      grouped.set(key, { productId: item.productId, quantity: item.quantity, boxesPerLayer });
-    }
-  }
-
-  const productLayers = Array.from(grouped.values()).map((entry) => {
-    const completedLayers = Math.floor(entry.quantity / entry.boxesPerLayer);
-    const openedLayers = Math.ceil(entry.quantity / entry.boxesPerLayer);
-    return {
-      productId: entry.productId,
-      quantity: entry.quantity,
-      boxesPerLayer: entry.boxesPerLayer,
-      completedLayers,
-      openedLayers
-    };
-  });
-
-  // Rule implementation:
-  // - One product: MOQ progress is live by quantity.
-  // - Multiple products: progress follows the product with fewer completed layers.
-  const moqCurrent = productLayers.length <= 1
-    ? (productLayers[0]?.quantity ?? 0)
-    : productLayers.reduce(
-        (sum, p) => sum + (Math.min(...productLayers.map((x) => x.completedLayers)) * p.boxesPerLayer),
-        0
-      );
-
-  const balancedLayers = productLayers.length === 0
-    ? 0
-    : Math.min(...productLayers.map((p) => p.completedLayers));
-  const totalBoxes = productLayers.reduce((sum, p) => sum + p.quantity, 0);
-
-  const progressMeta = {
-    balancedLayers,
-    totalBoxes,
-    remainingToTarget: Math.max(0, go.moqTarget - moqCurrent),
-    productLayers
-  };
-
-  let newStatus: GroupOrderStatus = go.status;
-  if (go.status === 'OPEN' && moqCurrent >= go.moqTarget) newStatus = 'MOQ_REACHED';
-  else if (go.status === 'MOQ_REACHED' && moqCurrent < go.moqTarget) newStatus = 'OPEN';
-
-  await prisma.groupOrder.update({
-    where: { id: groupOrderId },
-    data: { moqCurrent, status: newStatus, meta: progressMeta as any }
-  });
-  return moqCurrent;
-}
-
 function checkExpiry(go: { id: string; status: GroupOrderStatus; expiresAt: Date | null }) {
   if (go.expiresAt && new Date() > go.expiresAt && (go.status === 'OPEN' || go.status === 'DRAFT')) {
     prisma.groupOrder.update({ where: { id: go.id }, data: { status: 'EXPIRED' } }).catch(() => {});
@@ -439,11 +474,20 @@ function checkExpiry(go: { id: string; status: GroupOrderStatus; expiresAt: Date
   }
 }
 
-export async function createGroupOrder(customerId: string, moqTarget: number, deadlineHours?: number): Promise<GroupOrderFull> {
+export async function createGroupOrder(customerId: string, deadlineHours?: number): Promise<GroupOrderFull> {
+  const config = getGroupOrderConfig();
   const code = generateGroupCode();
   const expiresAt = deadlineHours ? new Date(Date.now() + deadlineHours * 60 * 60 * 1000) : null;
   const created = await prisma.groupOrder.create({
-    data: { code, createdByCustomerId: customerId, status: 'OPEN', moqTarget, moqCurrent: 0, expiresAt }
+    data: { 
+      code, 
+      createdByCustomerId: customerId, 
+      status: 'OPEN', 
+      moqSurfaces: config.defaultMoqSurfaces,
+      moqTarget: config.defaultMoqSurfaces, // Set to match moqSurfaces for backward compatibility
+      moqCurrent: 0, // DEPRECATED: kept for backward compatibility
+      expiresAt 
+    }
   });
   await prisma.groupOrderParticipant.create({
     data: { groupOrderId: created.id, customerId }
@@ -470,7 +514,7 @@ export async function leaveGroupOrder(code: string, customerId: string): Promise
   if (!go) throw new Error(`Group order ${code} not found`);
   await prisma.groupOrderParticipant.deleteMany({ where: { groupOrderId: go.id, customerId } });
   await prisma.groupOrderItem.deleteMany({ where: { groupOrderId: go.id, customerId } });
-  await recalcMoq(go.id);
+  await recalcMoqFromRepo(go.id);
 
   // Prevent orphan active orders: if no participants remain, mark as expired.
   // Cleanup policy will hard-delete expired orders.
@@ -513,12 +557,12 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
   }
   const qty = input.quantity ?? 1;
   const itemMeta = ((input.metadata as GroupOrderItemRuleMetadata | null) ?? {});
-  const manufacturerId = itemMeta.manufacturerId?.trim();
-  if (!manufacturerId) {
+  const manufacturer = itemMeta.manufacturer?.trim();
+  if (!manufacturer) {
     throw new Error('Product is missing manufacturer metadata. Cannot add to a group order.');
   }
 
-  if (go.manufacturerId && go.manufacturerId !== manufacturerId) {
+  if (go.manufacturerId && go.manufacturerId !== manufacturer) {
     throw new Error(`Group order ${code} is locked to manufacturer "${go.manufacturerId}".`);
   }
 
@@ -541,23 +585,79 @@ export async function addGroupOrderItem(code: string, customerId: string, input:
     await prisma.groupOrder.update({
       where: { id: go.id },
       data: {
-        manufacturerId,
+        manufacturerId: manufacturer,
         constraintsJson: {
-          manufacturerId,
-          manufacturerName: itemMeta.manufacturerName ?? null
+          manufacturer
         } as any
       }
     });
   }
-  await recalcMoq(go.id);
+  await recalcMoqFromRepo(go.id);
   return getGroupOrderStatus(code);
 }
 
 export async function removeGroupOrderItem(code: string, customerId: string, productId: string): Promise<GroupOrderFull> {
-  const go = await prisma.groupOrder.findUnique({ where: { code } });
+  const go = await prisma.groupOrder.findUnique({
+    where: { code },
+    include: {
+      surfaces: {
+        include: { layers: { where: { productId } } }
+      }
+    }
+  });
   if (!go) throw new Error(`Group order ${code} not found`);
-  await prisma.groupOrderItem.deleteMany({ where: { groupOrderId: go.id, customerId, productId } });
-  await recalcMoq(go.id);
+
+  await prisma.$transaction(async (tx) => {
+    for (const surface of go.surfaces) {
+      for (const layer of surface.layers) {
+        const contributions = (layer.contributions as Array<{ customerId: string; boxes: number; units: number; timestamp: string }> | null) ?? [];
+        const remaining = contributions.filter(c => c.customerId !== customerId);
+
+        if (remaining.length === contributions.length) continue; // nothing to remove
+
+        // Recalculate filled totals from remaining contributions
+        // unitsPerBox = capacityUnits / capacityBoxes
+        const unitsPerBox = layer.capacityBoxes > 0 ? layer.capacityUnits / layer.capacityBoxes : 1;
+        const newFilledUnits = remaining.reduce((sum, c) => sum + c.units, 0);
+        const newFilledBoxes = Math.floor(newFilledUnits / unitsPerBox);
+        const isFull = newFilledUnits >= layer.capacityUnits;
+
+        if (newFilledUnits === 0) {
+          // Layer is now empty — delete it
+          await tx.groupOrderLayer.delete({ where: { id: layer.id } });
+        } else {
+          await tx.groupOrderLayer.update({
+            where: { id: layer.id },
+            data: {
+              filledBoxes: newFilledBoxes,
+              filledUnits: newFilledUnits,
+              status: isFull ? 'full' : 'open',
+              contributions: remaining as any
+            }
+          });
+        }
+      }
+
+      // Re-check surface status after layer updates
+      const updatedLayers = await tx.groupOrderLayer.findMany({ where: { surfaceId: surface.id } });
+      if (updatedLayers.length === 0) {
+        // Surface is empty — delete it
+        await tx.groupOrderSurface.delete({ where: { id: surface.id } });
+      } else {
+        const allFull = updatedLayers.every(l => l.status === 'full');
+        const atMax = updatedLayers.length >= surface.maxLayers;
+        await tx.groupOrderSurface.update({
+          where: { id: surface.id },
+          data: { status: allFull && atMax ? 'full' : 'open' }
+        });
+      }
+    }
+
+    // Remove legacy item record
+    await tx.groupOrderItem.deleteMany({ where: { groupOrderId: go.id, customerId, productId } });
+  });
+
+  await recalcMoqFromRepo(go.id);
   return getGroupOrderStatus(code);
 }
 
@@ -566,25 +666,129 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
     where: { code },
     include: {
       participants: { select: { customerId: true, createdAt: true } },
-      items: { select: { id: true, customerId: true, productId: true, variantId: true, name: true, imageUrl: true, unitPrice: true, quantity: true } }
+      items: { select: { id: true, customerId: true, productId: true, variantId: true, name: true, imageUrl: true, unitPrice: true, quantity: true } },
+      surfaces: {
+        include: {
+          layers: {
+            orderBy: { layerIndex: 'asc' }
+          }
+        },
+        orderBy: { surfaceIndex: 'asc' }
+      }
     }
   });
   if (!go) throw new Error(`Group order ${code} not found`);
   checkExpiry(go);
+  
+  // Build enhanced progress with surface/layer details
   const progress = ((go.meta as GroupOrderFull['progress'] | null) ?? {
     balancedLayers: 0,
     totalBoxes: go.items.reduce((sum, i) => sum + i.quantity, 0),
     remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
     productLayers: []
   });
+
+  // Calculate live moqCurrent from surfaces/layers: only FULLY filled surfaces count (all layers full).
+  const liveMoqCurrent = go.surfaces.length > 0
+    ? go.surfaces.filter(s => s.layers.length > 0 && s.layers.every(l => l.status === 'full')).length
+    : go.moqCurrent;
+  const moqTarget = go.moqSurfaces ?? go.moqTarget;
+  // Derive status from live count so we never show MOQ_REACHED when surfaces are only partially filled.
+  const effectiveStatus = liveMoqCurrent >= moqTarget ? 'MOQ_REACHED' : (go.status === 'MOQ_REACHED' && liveMoqCurrent < moqTarget ? 'OPEN' : go.status);
+
+  // Product names and default price per product (for display / fallback)
+  const productNames = new Map<string, string>();
+  const productPrices = new Map<string, string>();
+  // Per-participant unit price per product (same product can have different prices: e.g. A 1 box = tier1, B 5 boxes = tier2)
+  const participantProductUnitPrice = new Map<string, number>();
+  for (const item of go.items) {
+    const key = `${item.productId}:${item.variantId ?? ''}`;
+    if (!productNames.has(key)) {
+      productNames.set(key, item.name);
+      productPrices.set(key, Number(item.unitPrice).toFixed(2));
+    }
+    const participantKey = `${item.customerId}:${key}`;
+    participantProductUnitPrice.set(participantKey, Number(item.unitPrice));
+  }
+
+  // Add surface and layer information with product names and prices
+  const surfaceDetails = go.surfaces.map(surface => ({
+    surfaceIndex: surface.surfaceIndex,
+    maxLayers: surface.maxLayers,
+    status: surface.status,
+    layers: surface.layers.map(layer => {
+      const key = `${layer.productId}:${layer.variantId ?? ''}`;
+      return {
+        layerIndex: layer.layerIndex,
+        productId: layer.productId,
+        productName: productNames.get(key) ?? layer.productId,
+        unitPrice: productPrices.get(key),
+        variantId: layer.variantId,
+        capacityBoxes: layer.capacityBoxes,
+        capacityUnits: layer.capacityUnits,
+        filledBoxes: layer.filledBoxes,
+        filledUnits: layer.filledUnits,
+        status: layer.status
+      };
+    })
+  }));
+
+  // Calculate per-participant cost: use each participant's unit price for that product (tiered: 1 box vs 5+ boxes can differ)
+  const participantCosts = new Map<string, {
+    total: number;
+    products: Map<string, { name: string; units: number; cost: number }>;
+  }>();
+  for (const surface of go.surfaces) {
+    for (const layer of surface.layers) {
+      const key = `${layer.productId}:${layer.variantId ?? ''}`;
+      const productName = productNames.get(key) ?? layer.productId;
+      const contributions = (layer.contributions as Array<{ customerId: string; units: number }> | null) ?? [];
+      for (const c of contributions) {
+        const participantKey = `${c.customerId}:${key}`;
+        const unitPrice = participantProductUnitPrice.get(participantKey) ?? Number(productPrices.get(key) ?? 0);
+        if (!participantCosts.has(c.customerId)) {
+          participantCosts.set(c.customerId, { total: 0, products: new Map() });
+        }
+        const entry = participantCosts.get(c.customerId)!;
+        entry.total += c.units * unitPrice;
+        const existing = entry.products.get(key);
+        if (existing) {
+          existing.units += c.units;
+          existing.cost += c.units * unitPrice;
+        } else {
+          entry.products.set(key, { name: productName, units: c.units, cost: c.units * unitPrice });
+        }
+      }
+    }
+  }
+  const participantSummary = Array.from(participantCosts.entries()).map(([customerId, data]) => ({
+    customerId,
+    total: data.total.toFixed(2),
+    products: Array.from(data.products.values()).map(p => ({
+      name: p.name,
+      units: p.units,
+      cost: p.cost.toFixed(2)
+    }))
+  }));
+
   return {
-    id: go.id, code: go.code, status: go.status, moqTarget: go.moqTarget, moqCurrent: go.moqCurrent,
-    manufacturerId: go.manufacturerId,
-    expiresAt: go.expiresAt, createdByCustomerId: go.createdByCustomerId,
+    id: go.id, 
+    code: go.code, 
+    status: effectiveStatus, 
+    moqTarget,
+    moqCurrent: liveMoqCurrent,
+    moqSurfaces: go.moqSurfaces,
+    surfaceMaxLayers: go.surfaceMaxLayers,
+    manufacturer: go.manufacturerId,
+    expiresAt: go.expiresAt, 
+    createdByCustomerId: go.createdByCustomerId,
     participants: go.participants,
     items: go.items.map((i) => ({ ...i, unitPrice: Number(i.unitPrice).toFixed(2) })),
     participantCount: go.participants.length,
-    progress
+    progress,
+    surfaces: surfaceDetails,
+    participantCosts: participantSummary,
+    isImport: go.isImport ?? false,
   };
 }
 
@@ -602,26 +806,49 @@ export async function listDiscoverableGroupOrders(params?: {
   const orders = await prisma.groupOrder.findMany({
     where: {
       status: { in: ['OPEN', 'MOQ_REACHED'] },
+      isImport: false, // only group orders; import orders are listed separately via getOpenImportOrders
       ...(manufacturerId ? { manufacturerId } : {}),
       OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
     },
     orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
     take: limit,
     include: {
-      participants: { select: { customerId: true } }
+      participants: { select: { customerId: true } },
+      surfaces: {
+        include: { layers: { select: { filledBoxes: true } } }
+      }
     }
   });
 
-  return orders.map((go) => ({
-    code: go.code,
-    status: go.status,
-    manufacturerId: go.manufacturerId,
-    moqTarget: go.moqTarget,
-    moqCurrent: go.moqCurrent,
-    remainingToTarget: Math.max(0, go.moqTarget - go.moqCurrent),
-    participantCount: go.participants.length,
-    expiresAt: go.expiresAt
-  }));
+  return orders.map((go) => {
+    // Calculate moqCurrent live from surfaces/layers if available (new algorithm)
+    // moqCurrent = number of FULLY COMPLETED surfaces (all layers full)
+    // A surface is complete when its status is 'full'
+    const liveMoqCurrent = go.surfaces.length > 0
+      ? go.surfaces.filter(s => s.status === 'full').length
+      : go.moqCurrent;
+
+    // moqTarget should match moqSurfaces (the real target in surfaces/pallets)
+    const moqTarget = go.moqSurfaces ?? go.moqTarget;
+
+    // Total boxes filled across all surfaces (for AI progress context)
+    const totalBoxesFilled = go.surfaces.reduce((sum, s) =>
+      sum + s.layers.reduce((ls, l) => ls + l.filledBoxes, 0), 0
+    );
+
+    return {
+      code: go.code,
+      status: go.status,
+      manufacturer: go.manufacturerId,
+      moqTarget,
+      moqCurrent: liveMoqCurrent,
+      remainingToTarget: Math.max(0, moqTarget - liveMoqCurrent),
+      participantCount: go.participants.length,
+      expiresAt: go.expiresAt,
+      surfacesOpened: go.surfaces.length,
+      totalBoxesFilled
+    };
+  });
 }
 
 export async function findBestGroupOrdersForManufacturer(params: {

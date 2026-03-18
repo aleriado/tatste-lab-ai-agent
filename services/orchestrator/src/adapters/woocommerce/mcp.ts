@@ -28,11 +28,8 @@ function toPositiveInt(value: unknown): number | undefined {
 }
 
 function normalizeProduct(raw: any): WooProduct {
-  const manufacturerIdRaw =
-    readMeta(raw, ['manufacturer_id', 'manufacturerId', 'supplier_id', 'vendor_id', 'brand_id']) ??
-    raw?.brands?.[0]?.id;
-  const manufacturerNameRaw =
-    readMeta(raw, ['manufacturer_name', 'manufacturer', 'supplier', 'vendor', 'brand']) ??
+  const manufacturerRaw =
+    readMeta(raw, ['manufacturer', 'manufacturer_name', 'supplier', 'vendor', 'brand']) ??
     raw?.brands?.[0]?.name;
   const boxesPerLayerRaw = readMeta(raw, [
     'boxes_per_layer',
@@ -40,6 +37,36 @@ function normalizeProduct(raw: any): WooProduct {
     'cartons_per_layer',
     'units_per_layer'
   ]);
+  const unitsPerBoxRaw = readMeta(raw, [
+    'units_per_box',
+    'units_in_box',
+    'units_per_carton',
+    'qty_per_box'
+  ]);
+  const layersPerSurfaceRaw = readMeta(raw, [
+    'layers_per_surface',
+    'number_of_layers_per_surface',
+    'layers_per_pallet',
+    'pallet_layers'
+  ]);
+  const boxesPerSurfaceRaw = readMeta(raw, [
+    'boxes_per_surface',
+    'boxes_per_pallet',
+    'cartons_per_surface',
+    'cartons_per_pallet'
+  ]);
+  const barcodeRaw = readMeta(raw, ['barcode', 'ean', 'ean13', 'upc', 'gtin']);
+  const costPriceRaw = readMeta(raw, ['cost_price', 'cost']);
+  const importPricePerSurfaceRaw = readMeta(raw, ['import_price_per_surface', 'import_price_surface']);
+  const importPricePer2BoxesRaw = readMeta(raw, ['import_price_per_2_boxes', 'import_price_2boxes']);
+  const wholesalePriceRaw = readMeta(raw, ['wholesale_price', 'stock_price']);
+  const salePriceRaw = raw?.sale_price || readMeta(raw, ['sale_price', 'on_sale_price']);
+  const statusRaw = raw?.status ?? readMeta(raw, ['status']);
+  const isDownloadableRaw = raw?.downloadable ?? readMeta(raw, ['is_downloadable', 'downloadable']);
+  const downloadLinkRaw = readMeta(raw, ['download_link', 'download_url']);
+  const subCategoryRaw = readMeta(raw, ['sub_category', 'subcategory']);
+  const tagsRaw = Array.isArray(raw?.tags) ? raw.tags.map((t: any) => t.name ?? String(t)) : undefined;
+  const inventoryRaw = raw?.stock_quantity ?? readMeta(raw, ['inventory', 'stock_quantity']);
 
   return {
     id: String(raw?.id ?? raw?.product_id ?? ''),
@@ -54,17 +81,38 @@ function normalizeProduct(raw: any): WooProduct {
     categories: Array.isArray(raw?.categories)
       ? raw.categories.map((c: any) => ({ id: c.id, name: c.name }))
       : [],
+    subCategory: subCategoryRaw != null ? String(subCategoryRaw) : undefined,
     type: raw?.type ?? 'simple',
     inStock: raw?.in_stock ?? raw?.stock_status === 'instock',
+    inventory: typeof inventoryRaw === 'number' ? inventoryRaw : undefined,
     relatedIds: Array.isArray(raw?.related_ids) ? raw.related_ids : [],
     crossSellIds: Array.isArray(raw?.cross_sell_ids) ? raw.cross_sell_ids : [],
     upsellIds: Array.isArray(raw?.upsell_ids) ? raw.upsell_ids : [],
-    manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
-    manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+    weight: raw?.weight != null ? String(raw.weight) : undefined,
+    barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+    costPrice: costPriceRaw != null ? String(costPriceRaw) : undefined,
+    importPricePerSurface: importPricePerSurfaceRaw != null ? String(importPricePerSurfaceRaw) : undefined,
+    importPricePer2Boxes: importPricePer2BoxesRaw != null ? String(importPricePer2BoxesRaw) : undefined,
+    wholesalePrice: wholesalePriceRaw != null ? String(wholesalePriceRaw) : undefined,
+    retailPrice: raw?.price != null ? String(raw.price) : undefined,
+    salePrice: salePriceRaw != null && String(salePriceRaw).trim() !== '' ? String(salePriceRaw) : undefined,
+    status: statusRaw != null ? String(statusRaw) : undefined,
+    isDownloadable: isDownloadableRaw === true || isDownloadableRaw === 'true' || isDownloadableRaw === '1',
+    downloadLink: downloadLinkRaw != null ? String(downloadLinkRaw) : undefined,
+    manufacturer: manufacturerRaw != null ? String(manufacturerRaw) : undefined,
+    tags: tagsRaw,
+    unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+    layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+    boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
     boxesPerLayer: toPositiveInt(boxesPerLayerRaw),
     metadata: {
-      manufacturerId: manufacturerIdRaw != null ? String(manufacturerIdRaw) : undefined,
-      manufacturerName: manufacturerNameRaw != null ? String(manufacturerNameRaw) : undefined,
+      inventory: typeof inventoryRaw === 'number' ? inventoryRaw : undefined,
+      weight: raw?.weight != null ? String(raw.weight) : undefined,
+      barcode: barcodeRaw != null ? String(barcodeRaw) : undefined,
+      unitsPerBox: toPositiveInt(unitsPerBoxRaw),
+      layersPerSurface: toPositiveInt(layersPerSurfaceRaw),
+      boxesPerSurface: toPositiveInt(boxesPerSurfaceRaw),
+      manufacturer: manufacturerRaw != null ? String(manufacturerRaw) : undefined,
       boxesPerLayer: toPositiveInt(boxesPerLayerRaw)
     }
   };
@@ -131,7 +179,7 @@ export function createMcpWooAdapter(): WooCommerceAdapter {
       }
     },
 
-    async getRelatedProducts(productId: string): Promise<WooProduct[]> {
+    async getRelatedProducts(productId: string, _options?: { sameManufacturerOnly?: boolean }): Promise<WooProduct[]> {
       try {
         const product = await this.getProduct(productId);
         if (!product) return [];

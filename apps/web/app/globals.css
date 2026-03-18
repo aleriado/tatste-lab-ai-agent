@@ -328,6 +328,16 @@ body {
 .cart-item-name {
   color: #e2e8f0;
 }
+.cart-item-type-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 0.12rem 0.35rem;
+  border-radius: 0.25rem;
+  background: rgba(71, 85, 105, 0.6);
+  color: #94a3b8;
+}
 .cart-item-qty {
   color: #9ca3af;
   font-size: 0.72rem;
@@ -490,6 +500,85 @@ body {
   margin-top: 0.2rem;
 }
 
+.group-order-participant-costs {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  background: rgba(16, 185, 129, 0.07);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 0.5rem;
+}
+
+.group-order-participant-costs-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #10b981;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.group-order-participant-cost-row {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.group-order-participant-cost-row:last-of-type {
+  border-bottom: none;
+}
+
+.group-order-participant-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.group-order-participant-label {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.group-order-participant-amount {
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.group-order-participant-product-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.group-order-participant-product-name {
+  color: #94a3b8;
+  flex: 1;
+  margin-right: 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-order-participant-product-detail {
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.group-order-participant-cost-total {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(16, 185, 129, 0.2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #10b981;
+  text-align: right;
+}
+
 .group-order-meta-row {
   margin-top: 0.35rem;
   font-size: 0.72rem;
@@ -544,6 +633,17 @@ body {
   display: inline-block;
   margin: 0 0.25rem;
   color: #64748b;
+}
+
+.group-order-layer-price {
+  color: #10b981;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.group-order-layer-price-total {
+  color: #94a3b8;
+  font-weight: 400;
 }
 
 /* ── Footer ── */
@@ -719,6 +819,38 @@ body {
   line-height: 1.6;
   margin-bottom: 1rem;
 }
+.modal-specs {
+  border: 1px solid rgba(71, 85, 105, 0.65);
+  border-radius: 0.6rem;
+  background: rgba(15, 23, 42, 0.5);
+  padding: 0.7rem;
+  margin-bottom: 1rem;
+}
+.modal-specs-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-bottom: 0.45rem;
+}
+.modal-specs-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+.modal-spec-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  font-size: 0.76rem;
+}
+.modal-spec-label {
+  color: #94a3b8;
+}
+.modal-spec-value {
+  color: #f1f5f9;
+  font-weight: 500;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 .modal-add-btn {
   width: 100%;
   padding: 0.7rem;
@@ -731,3 +863,290 @@ body {
   cursor: pointer;
 }
 .modal-add-btn:hover { opacity: 0.9; }
+
+/* ── Group Order MOQ Card ── */
+.group-order-moq-card {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  background: rgba(15, 23, 42, 0.55);
+  text-align: center;
+}
+
+.group-order-moq-title {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 0.3rem;
+}
+
+.group-order-moq-value {
+  font-size: 0.82rem;
+  color: #cbd5e1;
+  margin-bottom: 0.25rem;
+}
+
+.group-order-moq-hint {
+  font-size: 0.68rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.group-order-moq-info {
+  font-size: 0.72rem;
+  color: #cbd5e1;
+  margin-bottom: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(56, 189, 248, 0.08);
+  border-radius: 0.35rem;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+/* ── Group Order Surfaces Card ── */
+.group-order-surfaces-card {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(71, 85, 105, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.group-order-surfaces-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 0.15rem;
+}
+
+.group-order-surfaces-subtitle {
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: #94a3b8;
+  margin-left: 0.3rem;
+}
+
+/* ── Individual Surface ── */
+.group-order-surface {
+  margin-top: 0.5rem;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 0.45rem;
+  padding: 0.5rem;
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.group-order-surface-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.group-order-surface-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #c4b5fd;
+}
+
+.group-order-surface-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+}
+
+.group-order-surface-status.open {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+}
+
+.group-order-surface-status.full {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+/* ── Layers Container ── */
+.group-order-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.group-order-layer-empty {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-style: italic;
+  padding: 0.3rem;
+  text-align: center;
+}
+
+/* ── Individual Layer ── */
+.group-order-layer {
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 0.35rem;
+  padding: 0.4rem;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.group-order-layer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.group-order-layer-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.group-order-layer-status {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.08rem 0.3rem;
+  border-radius: 0.2rem;
+}
+
+.group-order-layer-status.open {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fcd34d;
+}
+
+.group-order-layer-status.full {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.group-order-layer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.group-order-layer-product {
+  font-size: 0.72rem;
+  color: #e2e8f0;
+}
+
+.group-order-layer-product-name {
+  font-size: 0.72rem;
+  color: #e2e8f0;
+  font-weight: 500;
+  margin-bottom: 0.15rem;
+}
+
+.group-order-layer-stats {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+/* ── Import Order Status ── */
+
+.import-order-status {
+  margin: 0.4rem 0.5rem;
+  padding: 0.8rem;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(55, 65, 81, 0.8);
+  border-radius: 0.6rem;
+  font-size: 0.82rem;
+  color: #e2e8f0;
+}
+
+.import-order-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  margin-bottom: 0.4rem;
+}
+
+.order-status-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.order-status-badge.open {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+
+.order-status-badge.moq_reached {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.order-status-badge.checkout_started {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fcd34d;
+}
+
+.order-status-badge.expired {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.import-order-manufacturer {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+}
+
+.import-order-progress {
+  margin-bottom: 0.4rem;
+}
+
+.progress-bar-container {
+  height: 6px;
+  background: rgba(55, 65, 81, 0.6);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(to right, #38bdf8, #6366f1);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.import-order-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid rgba(55, 65, 81, 0.5);
+}
+
+.import-order-item {
+  font-size: 0.76rem;
+  color: #cbd5e1;
+}
+
+/* ── RTL adjustments ── */
+
+[dir="rtl"] .message-bubble.user {
+  border-bottom-right-radius: 0.75rem;
+  border-bottom-left-radius: 0.25rem;
+}
+
+[dir="rtl"] .message-bubble.bot {
+  border-bottom-left-radius: 0.75rem;
+  border-bottom-right-radius: 0.25rem;
+}
