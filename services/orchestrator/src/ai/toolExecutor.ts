@@ -23,10 +23,10 @@ import {
   checkoutImportOrder,
 } from '@taste-labs/db';
 import type { ProductLogistics } from '@taste-labs/db/src/groupOrder/types';
-import type { SessionContext } from '@taste-labs/shared';
+import type { SessionContext, CartSnapshot } from '@taste-labs/shared';
 import { getPaymentAdapter } from '../adapters/payment';
 import { getAvailableOrderTypes } from './orderTypeRouter';
-import { stripPricesForCatalogExtension } from './interventionGates';
+import { validateCartCheckout } from './interventionGates';
 import { logInfo, logError } from '../logger';
 
 export interface ToolContext {
@@ -76,6 +76,9 @@ function extractProductLogistics(product: WooProduct): ProductLogistics | { miss
     return { missingFields };
   }
 
+  const moqBoxesRaw = product.metadata?.groupOrderMoqBoxes ?? (product as { groupOrderMoqBoxes?: number }).groupOrderMoqBoxes;
+  const moqBoxes = typeof moqBoxesRaw === 'number' && moqBoxesRaw > 0 ? moqBoxesRaw : undefined;
+
   return {
     productId: product.id,
     variantId: null,
@@ -84,7 +87,8 @@ function extractProductLogistics(product: WooProduct): ProductLogistics | { miss
     unitsPerBox: unitsPerBox as number,
     boxesPerLayer: boxesPerLayer as number,
     layersPerSurface: layersPerSurface as number,
-    boxesPerSurface: boxesPerSurface ?? ((boxesPerLayer as number) * (layersPerSurface as number))
+    boxesPerSurface: boxesPerSurface ?? ((boxesPerLayer as number) * (layersPerSurface as number)),
+    ...(moqBoxes != null && { moqBoxes }),
   };
 }
 
@@ -120,10 +124,12 @@ export async function executeTool(
       if (isBrowse && normalizedLimit < 50) normalizedLimit = 100;
       const maxPrice = Number(args.maxPrice);
       const minPrice = Number(args.minPrice);
+      const manufacturer = typeof args.manufacturer === 'string' && args.manufacturer.trim() ? args.manufacturer.trim() : undefined;
       const filters = {
         limit: normalizedLimit,
         ...(Number.isFinite(maxPrice) && maxPrice >= 0 && { maxPrice }),
         ...(Number.isFinite(minPrice) && minPrice >= 0 && { minPrice }),
+        ...(manufacturer && { manufacturer }),
       };
       if (typeof woo.searchProductsWithMeta === 'function') {
         const meta = await woo.searchProductsWithMeta(query, filters);
@@ -261,6 +267,18 @@ export async function executeTool(
         return { data: { error: 'Cart is empty. Add items before checkout.' } };
       }
 
+      // AIS-08: Validate minimum order quantities before proceeding
+      const validation = validateCartCheckout(summary as unknown as CartSnapshot, {});
+      if (!validation.allowed) {
+        return {
+          data: {
+            error: `Cannot proceed to checkout: ${validation.summary}`,
+            shortfalls: validation.shortfalls,
+            gate: 'AIS-08',
+          },
+        };
+      }
+
       const payment = getPaymentAdapter();
       const result = await payment.createCheckoutSession({
         customerId: ctx.customerId,
@@ -270,6 +288,26 @@ export async function executeTool(
         meta: { items: summary.items }
       });
 
+      // AIS-07: Post-order suggestions — related products for purchased items
+      const purchasedIds = summary.items.map((i) => i.productId);
+      let postOrderProducts: WooProduct[] = [];
+      try {
+        const seen = new Set<string>(purchasedIds);
+        for (const pid of purchasedIds) {
+          const related = await woo.getRelatedProducts(pid, {});
+          for (const p of related) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id);
+              postOrderProducts.push(p);
+            }
+            if (postOrderProducts.length >= 3) break;
+          }
+          if (postOrderProducts.length >= 3) break;
+        }
+      } catch {
+        // Non-critical — proceed without suggestions
+      }
+
       return {
         data: {
           message: 'Checkout session created',
@@ -277,8 +315,15 @@ export async function executeTool(
           totalAmount: result.totalAmount,
           amountDueNow: result.amountDueNow,
           amountDueLater: result.amountDueLater,
-          currency: result.currency
-        }
+          currency: result.currency,
+          ...(postOrderProducts.length > 0 && {
+            postOrderSuggestions: {
+              message: 'You might also enjoy these products',
+              products: postOrderProducts.map((p) => ({ id: p.id, name: p.name })),
+            },
+          }),
+        },
+        products: postOrderProducts.length > 0 ? postOrderProducts : undefined,
       };
     }
 
@@ -420,9 +465,14 @@ export async function executeTool(
           let userMessage = result.error?.message ?? 'Failed to add item to group order';
           
           if (result.error?.code === 'MANUFACTURER_MISMATCH') {
-            userMessage = `This group order is locked to manufacturer "${result.error.details.groupOrderManufacturer}". Product "${product.name}" is from "${result.error.details.productManufacturer}".`;
+            const locked = (result.error.details?.groupOrderManufacturer as string) ?? 'this manufacturer';
+            const productMfr = (result.error.details?.productManufacturer as string) ?? 'another';
+            userMessage = `This group order is locked to products from ${locked}. "${product.name}" is made by ${productMfr}, so it can't be added here. Would you like to see what's available from ${locked} instead?`;
+          } else if (result.error?.code === 'BELOW_MOQ') {
+            const moqBoxes = (result.error.details?.moqBoxes as number) ?? 1;
+            userMessage = `The minimum order for "${product.name}" is ${moqBoxes} boxes. You've asked for fewer. Would you like to go with the minimum of ${moqBoxes} boxes instead?`;
           } else if (result.error?.code === 'OVERFLOW') {
-            userMessage = `Cannot add ${quantity} units - would exceed group order capacity. ${result.error.message}`;
+            userMessage = `Only limited space is left on this surface. You asked for more than fits. Maximum you can add here is in the details. Would you like to take the remaining space, or join a new surface for the full amount? ${result.error.message}`;
           } else if (result.error?.code === 'LAYER_LIMIT_CONFLICT') {
             userMessage = `Cannot add this product - it would reduce the allowed layers per surface below currently opened layers.`;
           }
@@ -498,6 +548,30 @@ export async function executeTool(
         }
       });
 
+      // AIS-07: Post-order suggestions — related products from order's surfaces
+      const groupProductIds = [
+        ...new Set(
+          (go.surfaces ?? []).flatMap((s) => s.layers.map((l) => l.productId)).filter(Boolean)
+        ),
+      ];
+      let groupPostOrderProducts: WooProduct[] = [];
+      try {
+        const seen = new Set<string>(groupProductIds);
+        for (const pid of groupProductIds) {
+          const related = await woo.getRelatedProducts(pid, {});
+          for (const p of related) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id);
+              groupPostOrderProducts.push(p);
+            }
+            if (groupPostOrderProducts.length >= 3) break;
+          }
+          if (groupPostOrderProducts.length >= 3) break;
+        }
+      } catch {
+        // Non-critical — proceed without suggestions
+      }
+
       return {
         data: {
           message: `Checkout ready for group order ${code}`,
@@ -507,8 +581,15 @@ export async function executeTool(
           paymentUrl: result.paymentUrl,
           amountDueNow: result.amountDueNow,
           amountDueLater: result.amountDueLater,
-          currency: result.currency
-        }
+          currency: result.currency,
+          ...(groupPostOrderProducts.length > 0 && {
+            postOrderSuggestions: {
+              message: 'You might also enjoy these products',
+              products: groupPostOrderProducts.map((p) => ({ id: p.id, name: p.name })),
+            },
+          }),
+        },
+        products: groupPostOrderProducts.length > 0 ? groupPostOrderProducts : undefined,
       };
     }
 
@@ -638,6 +719,18 @@ export async function executeTool(
       }
       const importUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
 
+      // Drop-import: whole layers only — quantity must be a multiple of units per layer
+      const unitsPerLayer = logistics.boxesPerLayer * logistics.unitsPerBox;
+      if (quantity <= 0 || quantity % unitsPerLayer !== 0) {
+        return {
+          data: {
+            error: `In a drop-import order, layers can't be split — each layer is committed in full. "${product.name}" layers contain ${logistics.boxesPerLayer} boxes each (${unitsPerLayer} units per layer). How many full layers would you like?`,
+            code: 'PARTIAL_LAYER',
+            details: { boxesPerLayer: logistics.boxesPerLayer, unitsPerBox: logistics.unitsPerBox, unitsPerLayer },
+          },
+        };
+      }
+
       try {
         const result = await addItemToImportOrder(code, ctx.customerId, logistics, quantity, {
           productName: product.name,
@@ -657,9 +750,11 @@ export async function executeTool(
 
           let userMessage = result.error?.message ?? 'Failed to add item to import order';
           if (result.error?.code === 'MANUFACTURER_MISMATCH') {
-            userMessage = `This import order is locked to a different manufacturer. "${product.name}" cannot be added.`;
+            const locked = (result.error.details?.groupOrderManufacturer as string) ?? 'this manufacturer';
+            const productMfr = (result.error.details?.productManufacturer as string) ?? 'another';
+            userMessage = `This import order is locked to products from ${locked}. "${product.name}" is made by ${productMfr}, so it can't be added here. Would you like to see what's available from ${locked} instead?`;
           } else if (result.error?.code === 'OVERFLOW') {
-            userMessage = `Cannot add ${quantity} units — would exceed palette capacity. ${result.error.message}`;
+            userMessage = `You've asked for more layers than fit on the remaining surface. Only limited space is left. Options: use the remaining space for this product, or use fewer layers and leave room for another product. ${result.error.message}`;
           } else if (result.error?.code === 'SINGLE_USER_VIOLATION') {
             userMessage = result.error.message;
           }
@@ -674,13 +769,15 @@ export async function executeTool(
           allocatedUnits: result.allocatedUnits,
         });
 
+        const layersAdded = result.allocatedBoxes / logistics.boxesPerLayer;
         return {
           data: {
-            message: `Added ${result.allocatedUnits} units (${result.allocatedBoxes} boxes) to import order ${code}`,
+            message: `Your ${layersAdded} layer(s) of ${product.name} are confirmed. ${result.allocatedBoxes} boxes (${result.allocatedUnits} items) added to import order ${code}.`,
             ...status,
             allocationResult: {
               allocatedBoxes: result.allocatedBoxes,
               allocatedUnits: result.allocatedUnits,
+              layersAdded,
               surfacesOpened: result.surfacesOpened,
               layersOpened: result.layersOpened,
             },
