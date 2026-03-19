@@ -261,6 +261,20 @@ export interface ImportOrderStatus {
 /** Same shape as GroupOrderSnapshot so the same status UI can render both. Only difference: single participant (import order). */
 export type ImportOrderSnapshot = GroupOrderSnapshot & { isImport: true };
 
+export interface QuantityPrompt {
+  /** Order type this prompt is for — currently only stock orders use the visual picker. */
+  orderType: 'stock';
+  productId: string;
+  productName: string;
+  /** Minimum allowed quantity in boxes (= moqBoxes from stock OrderTypeOption). */
+  min: number;
+  /** Starting value shown in the picker (= min). */
+  default: number;
+  pricePerUnit?: string;
+  /** Units per box — used in picker label so user can see unit count. */
+  unitsPerBox?: number;
+}
+
 export interface OrchestratorReply {
   trace_id: string;
   reply: string;
@@ -275,4 +289,6 @@ export interface OrchestratorReply {
   /** All group orders when user asks for "all" group/import orders status. */
   groupOrders?: GroupOrderSnapshot[];
   importOrders?: ImportOrderSnapshot[];
+  /** When the bot is asking for a stock order quantity, this provides MOQ constraints for the visual picker. */
+  quantityPrompt?: QuantityPrompt;
 }

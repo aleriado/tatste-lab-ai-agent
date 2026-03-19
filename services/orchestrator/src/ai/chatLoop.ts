@@ -7,9 +7,8 @@ import { tagMessageWithLanguage, detectLanguage, isNumbersOnly } from './languag
 import type { DetectedLanguage } from './languageHandler';
 import { stripPricesForCatalogExtension } from './interventionGates';
 import type { WooProduct } from '../adapters/woocommerce';
-import type { CartSummary } from '@taste-labs/db';
 import { getGroupOrderStatus } from '@taste-labs/db';
-import type { ProductCard, CartSnapshot, GroupOrderSnapshot, ImportOrderSnapshot, CheckoutLink } from '@taste-labs/shared';
+import type { ProductCard, CartSnapshot, GroupOrderSnapshot, ImportOrderSnapshot, CheckoutLink, QuantityPrompt } from '@taste-labs/shared';
 import { logInfo, logError } from '../logger';
 
 const MAX_TOOL_ROUNDS = 6;
@@ -41,6 +40,8 @@ export interface ChatLoopResult {
   groupOrders?: GroupOrderSnapshot[];
   importOrders?: ImportOrderSnapshot[];
   detectedLanguage?: 'he' | 'en';
+  /** When the bot is asking for a stock order quantity, carries MOQ constraints for the visual picker. */
+  quantityPrompt?: QuantityPrompt;
 }
 
 function wooToCard(p: WooProduct): ProductCard {
@@ -102,6 +103,59 @@ function getLastUserLanguage(history: { role: string; content: string }[]): Dete
     return detectLanguage(content);
   }
   return null;
+}
+
+/**
+ * Scans the message history for the most recent get_order_type_options result that
+ * contains a stock type with moqBoxes, and checks that the product was not already
+ * added to cart as a stock order. Returns the data needed to render the quantity picker.
+ */
+function extractStockQuantityPrompt(messages: ChatCompletionMessageParam[]): QuantityPrompt | undefined {
+  let latestOrderTypeCallId: string | null = null;
+  let latestOrderTypeResult: Record<string, unknown> | null = null;
+  let stockCartedProductId: string | null = null;
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && (m as any).tool_calls) {
+      for (const tc of (m as any).tool_calls) {
+        if (tc.function?.name === 'get_order_type_options') {
+          latestOrderTypeCallId = tc.id;
+          latestOrderTypeResult = null; // reset until we find its result
+        }
+        if (tc.function?.name === 'cart_add_item') {
+          try {
+            const args = JSON.parse(tc.function.arguments || '{}');
+            if (args.orderType === 'stock') stockCartedProductId = String(args.productId ?? '');
+          } catch { /* ignore */ }
+        }
+      }
+    }
+    if (m.role === 'tool' && latestOrderTypeCallId && (m as any).tool_call_id === latestOrderTypeCallId) {
+      try {
+        latestOrderTypeResult = JSON.parse(m.content as string);
+      } catch { /* ignore */ }
+    }
+  }
+
+  if (!latestOrderTypeResult) return undefined;
+
+  const types = latestOrderTypeResult.types as Array<Record<string, unknown>> | undefined;
+  const stockType = types?.find((t) => t.type === 'stock' && t.available && t.moqBoxes);
+  if (!stockType) return undefined;
+
+  const productId = String(latestOrderTypeResult.productId ?? '');
+  if (!productId || stockCartedProductId === productId) return undefined;
+
+  const moqBoxes = Number(stockType.moqBoxes);
+  return {
+    orderType: 'stock',
+    productId,
+    productName: String(latestOrderTypeResult.productName ?? ''),
+    min: moqBoxes,
+    default: moqBoxes,
+    pricePerUnit: stockType.pricePerUnit != null ? String(stockType.pricePerUnit) : undefined,
+    unitsPerBox: latestOrderTypeResult.unitsPerBox != null ? Number(latestOrderTypeResult.unitsPerBox) : undefined,
+  };
 }
 
 export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult> {
@@ -229,6 +283,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
         groupOrders: collectedGroupOrders.length > 0 ? collectedGroupOrders : undefined,
         importOrders: collectedImportOrders.length > 0 ? collectedImportOrders : undefined,
         detectedLanguage: detectedLang,
+        quantityPrompt: extractStockQuantityPrompt(messages),
       };
     }
 

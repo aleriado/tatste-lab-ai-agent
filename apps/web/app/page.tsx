@@ -10,12 +10,14 @@ import type {
   GroupOrderSnapshot,
   ImportOrderSnapshot,
   ContextMetadata,
+  QuantityPrompt,
 } from "@taste-labs/shared";
 import ProductCard from "./components/ProductCard";
 import CartSummary from "./components/CartSummary";
 import QuickActions from "./components/QuickActions";
 import LinkBubble from "./components/LinkBubble";
 import GroupOrderStatus from "./components/GroupOrderStatus";
+import QuantityPicker from "./components/QuantityPicker";
 
 type Lang = "en" | "he";
 
@@ -45,6 +47,7 @@ type ChatMessage = {
   importOrder?: ImportOrderSnapshot;
   groupOrders?: GroupOrderSnapshot[];
   importOrders?: ImportOrderSnapshot[];
+  quantityPrompt?: QuantityPrompt;
 };
 
 const HEBREW_RANGE = /[\u0590-\u05FF]/;
@@ -294,7 +297,8 @@ export default function ChatPage() {
       const data: OrchestratorReply = await res.json();
 
       setMessages((prev) => [
-        ...prev,
+        // Clear quantityPrompt from all prior messages so the picker only appears once
+        ...prev.map((m) => m.quantityPrompt ? { ...m, quantityPrompt: undefined } : m),
         {
           from: "bot",
           text: data.reply,
@@ -306,6 +310,7 @@ export default function ChatPage() {
           importOrder: data.importOrder,
           groupOrders: data.groupOrders,
           importOrders: data.importOrders,
+          quantityPrompt: data.quantityPrompt,
         },
       ]);
     } catch {
@@ -392,6 +397,15 @@ export default function ChatPage() {
 
               {m.suggestions && m.suggestions.length > 0 && (
                 <QuickActions suggestions={m.suggestions.map(tr)} onAction={handleAction} disabled={isSending} />
+              )}
+
+              {m.quantityPrompt && (
+                <QuantityPicker
+                  prompt={m.quantityPrompt}
+                  onConfirm={handleAction}
+                  disabled={isSending}
+                  lang={lang}
+                />
               )}
             </div>
             );

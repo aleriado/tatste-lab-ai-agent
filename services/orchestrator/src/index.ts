@@ -228,6 +228,7 @@ app.post('/api/message', async (req, res) => {
         importOrder: result.importOrder,
         groupOrders: result.groupOrders,
         importOrders: result.importOrders,
+        quantityPrompt: result.quantityPrompt,
       };
     } else {
       // ── Legacy: rule-based fallback (M1 behavior) ──

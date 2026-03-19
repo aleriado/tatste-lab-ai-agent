@@ -1234,3 +1234,116 @@ body {
   border-bottom-left-radius: 0.75rem;
   border-bottom-right-radius: 0.25rem;
 }
+
+/* ── Quantity Picker ── */
+
+.quantity-picker {
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  margin: 0.3rem 0 0.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.quantity-picker-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.quantity-picker-product {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.quantity-picker-moq {
+  font-size: 0.72rem;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+.quantity-picker-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.qty-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  border: 1px solid rgba(99, 102, 241, 0.6);
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.qty-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.35);
+  border-color: #6366f1;
+}
+.qty-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.qty-value {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  min-width: 3.5rem;
+  text-align: center;
+}
+
+.qty-unit {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+.qty-price {
+  font-size: 0.78rem;
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.qty-units-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.qty-confirm-btn {
+  margin-inline-start: auto;
+  padding: 0.3rem 0.75rem;
+  border-radius: 0.45rem;
+  border: none;
+  background: linear-gradient(to right, #6366f1, #38bdf8);
+  color: white;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+.qty-confirm-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.qty-confirm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
