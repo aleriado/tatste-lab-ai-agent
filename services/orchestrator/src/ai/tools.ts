@@ -441,4 +441,20 @@ export const conciergeTools: ChatCompletionTool[] = [
       }
     }
   },
+  {
+    type: 'function',
+    function: {
+      name: 'import_update_item',
+      description: 'Change the number of layers for a product already allocated in a drop-import order (spec §5.7 mid-order changes). newLayerCount is the desired FINAL layer count (not a delta). If 0, removes the product entirely. Partial layers are not permitted — newLayerCount must be a whole number. Only the import order creator can update. Always confirm with user before calling: "Reducing [Product] from [N] to [M] layers frees up [N-M] layers. Confirm?"',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The import order code' },
+          productId: { type: 'string', description: 'Product ID to update' },
+          newLayerCount: { type: 'number', description: 'Desired final layer count (0 = remove product entirely). Must be a whole number.' }
+        },
+        required: ['code', 'productId', 'newLayerCount']
+      }
+    }
+  },
 ];

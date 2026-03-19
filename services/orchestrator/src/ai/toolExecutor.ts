@@ -943,6 +943,75 @@ export async function executeTool(
       }
     }
 
+    case 'import_update_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      const newLayerCount = args.newLayerCount as number;
+
+      try {
+        const existing = await getGroupOrderStatus(code);
+        if (!existing.isImport) {
+          return { data: { error: `Order ${code} is not an import order.` } };
+        }
+        if (existing.createdByCustomerId !== ctx.customerId) {
+          return { data: { error: 'Only the import order creator can update items.' } };
+        }
+
+        const product = await woo.getProduct(productId);
+        if (!product) return { data: { error: `Product ${productId} not found` } };
+
+        const logistics = extractProductLogistics(product);
+        if (!logistics || 'missingFields' in logistics) {
+          const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+          return { data: { error: `Missing logistics fields for "${product.name}": ${missing.join(', ')}.` } };
+        }
+
+        // Step 1: Remove current allocation for this product
+        await removeGroupOrderItem(code, ctx.customerId, productId);
+
+        // Step 2: Re-add with new layer count (if > 0)
+        if (newLayerCount > 0) {
+          const newQuantityUnits = newLayerCount * logistics.boxesPerLayer * logistics.unitsPerBox;
+
+          const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+          const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+          const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+          const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+          const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+          const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+          const importUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
+
+          const result = await addItemToImportOrder(code, ctx.customerId, logistics, newQuantityUnits, {
+            productName: product.name,
+            unitPrice: importUnitPrice,
+            imageUrl: product.images?.[0]?.src ?? null,
+            ...(hasTierPrices && { importPricePer2Boxes: importPer2, importPricePerSurface: importPerSurface }),
+          });
+
+          if (!result.success) {
+            logInfo(`import_update_item: re-add failed productId=${productId} code=${code}`, { traceId: ctx.traceId, error: result.error });
+            return { data: { error: result.error?.message ?? 'Failed to update import order allocation', details: result.error } };
+          }
+        }
+
+        const status = await getGroupOrderStatus(code);
+        const layersFreed = newLayerCount === 0 ? 'all layers freed' : `updated to ${newLayerCount} layer(s)`;
+        logInfo(`import_update_item: success productId=${productId} code=${code} newLayerCount=${newLayerCount}`, { traceId: ctx.traceId });
+        return {
+          data: {
+            message: newLayerCount === 0
+              ? `"${product.name}" has been removed from import order ${code}. Those layers are now available.`
+              : `"${product.name}" updated to ${newLayerCount} layer(s) in import order ${code}. ${layersFreed}.`,
+            ...status
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_update_item failed code=${code} productId=${productId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
     default:
       logError(`Unknown tool: ${name}`, { traceId: ctx.traceId });
       return { data: { error: `Unknown tool: ${name}` } };
