@@ -48,8 +48,16 @@ type ChatMessage = {
 };
 
 const HEBREW_RANGE = /[\u0590-\u05FF]/;
-function isHebrew(text: string): boolean {
+const LATIN_RANGE = /[A-Za-z]/;
+function hasHebrew(text: string): boolean {
   return HEBREW_RANGE.test(text);
+}
+function hasLatin(text: string): boolean {
+  return LATIN_RANGE.test(text);
+}
+/** Returns true when the text contains Hebrew characters (used for user-input direction detection). */
+function isRtlContent(text: string): boolean {
+  return hasHebrew(text);
 }
 
 /** True if the text is only digits (and optional spaces). Used to avoid flipping layout when user sends e.g. "50". */
@@ -253,7 +261,7 @@ export default function ChatPage() {
 
     // Auto-detect language from user input and switch UI direction. Do NOT change direction when user sends only numbers (e.g. "50") so positions stay the same (user left, bot right in RTL).
     if (!isNumbersOnly(trimmed)) {
-      const detectedLang: Lang = isHebrew(trimmed) ? "he" : "en";
+      const detectedLang: Lang = hasHebrew(trimmed) ? "he" : "en";
       setLang(detectedLang);
     }
 
@@ -337,7 +345,8 @@ export default function ChatPage() {
 
         <div className="chat-messages">
           {messages.map((m, idx) => {
-            const msgRtl = isHebrew(m.text);
+            // Bot bubbles follow the session language; user bubbles use content detection.
+            const msgRtl = m.from === "user" ? isRtlContent(m.text) : lang === "he";
             return (
             <div key={idx}>
               <div className={`message-row ${m.from}`}>
