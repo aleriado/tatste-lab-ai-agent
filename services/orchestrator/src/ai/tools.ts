@@ -410,5 +410,35 @@ export const conciergeTools: ChatCompletionTool[] = [
         }
       }
     }
-  }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'group_update_item',
+      description: 'Change the quantity (in boxes) of a product a returning participant has reserved in a group order. Use when user wants to increase or decrease their current reservation. newQuantityBoxes is the desired FINAL box count (not a delta). If 0, cancels the reservation for that product. Validates MOQ: if newQuantityBoxes > 0 but below product MOQ, returns an error with the spec message instead of proceeding. Always confirm with user before calling.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The group order code' },
+          productId: { type: 'string', description: 'Product ID to update' },
+          newQuantityBoxes: { type: 'number', description: 'Desired final box count for this product (0 = cancel reservation)' }
+        },
+        required: ['code', 'productId', 'newQuantityBoxes']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'import_checkout',
+      description: 'Initiate checkout for a complete import order (surface fully filled). Validates the surface is complete, transitions status to CHECKOUT_STARTED, and creates a payment session. Only the import order creator can check out. Call when user confirms they are ready to submit the complete import order.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The import order code to check out' }
+        },
+        required: ['code']
+      }
+    }
+  },
 ];

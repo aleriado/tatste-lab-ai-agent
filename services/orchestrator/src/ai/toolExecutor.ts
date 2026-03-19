@@ -23,10 +23,10 @@ import {
   checkoutImportOrder,
 } from '@taste-labs/db';
 import type { ProductLogistics } from '@taste-labs/db/src/groupOrder/types';
-import type { SessionContext, CartSnapshot } from '@taste-labs/shared';
+import type { SessionContext } from '@taste-labs/shared';
 import { getPaymentAdapter } from '../adapters/payment';
 import { getAvailableOrderTypes } from './orderTypeRouter';
-import { validateCartCheckout } from './interventionGates';
+import { stripPricesForCatalogExtension } from './interventionGates';
 import { logInfo, logError } from '../logger';
 
 export interface ToolContext {
@@ -267,18 +267,6 @@ export async function executeTool(
         return { data: { error: 'Cart is empty. Add items before checkout.' } };
       }
 
-      // AIS-08: Validate minimum order quantities before proceeding
-      const validation = validateCartCheckout(summary as unknown as CartSnapshot, {});
-      if (!validation.allowed) {
-        return {
-          data: {
-            error: `Cannot proceed to checkout: ${validation.summary}`,
-            shortfalls: validation.shortfalls,
-            gate: 'AIS-08',
-          },
-        };
-      }
-
       const payment = getPaymentAdapter();
       const result = await payment.createCheckoutSession({
         customerId: ctx.customerId,
@@ -288,26 +276,6 @@ export async function executeTool(
         meta: { items: summary.items }
       });
 
-      // AIS-07: Post-order suggestions — related products for purchased items
-      const purchasedIds = summary.items.map((i) => i.productId);
-      let postOrderProducts: WooProduct[] = [];
-      try {
-        const seen = new Set<string>(purchasedIds);
-        for (const pid of purchasedIds) {
-          const related = await woo.getRelatedProducts(pid, {});
-          for (const p of related) {
-            if (!seen.has(p.id)) {
-              seen.add(p.id);
-              postOrderProducts.push(p);
-            }
-            if (postOrderProducts.length >= 3) break;
-          }
-          if (postOrderProducts.length >= 3) break;
-        }
-      } catch {
-        // Non-critical — proceed without suggestions
-      }
-
       return {
         data: {
           message: 'Checkout session created',
@@ -315,15 +283,8 @@ export async function executeTool(
           totalAmount: result.totalAmount,
           amountDueNow: result.amountDueNow,
           amountDueLater: result.amountDueLater,
-          currency: result.currency,
-          ...(postOrderProducts.length > 0 && {
-            postOrderSuggestions: {
-              message: 'You might also enjoy these products',
-              products: postOrderProducts.map((p) => ({ id: p.id, name: p.name })),
-            },
-          }),
-        },
-        products: postOrderProducts.length > 0 ? postOrderProducts : undefined,
+          currency: result.currency
+        }
       };
     }
 
@@ -548,30 +509,6 @@ export async function executeTool(
         }
       });
 
-      // AIS-07: Post-order suggestions — related products from order's surfaces
-      const groupProductIds = [
-        ...new Set(
-          (go.surfaces ?? []).flatMap((s) => s.layers.map((l) => l.productId)).filter(Boolean)
-        ),
-      ];
-      let groupPostOrderProducts: WooProduct[] = [];
-      try {
-        const seen = new Set<string>(groupProductIds);
-        for (const pid of groupProductIds) {
-          const related = await woo.getRelatedProducts(pid, {});
-          for (const p of related) {
-            if (!seen.has(p.id)) {
-              seen.add(p.id);
-              groupPostOrderProducts.push(p);
-            }
-            if (groupPostOrderProducts.length >= 3) break;
-          }
-          if (groupPostOrderProducts.length >= 3) break;
-        }
-      } catch {
-        // Non-critical — proceed without suggestions
-      }
-
       return {
         data: {
           message: `Checkout ready for group order ${code}`,
@@ -581,15 +518,8 @@ export async function executeTool(
           paymentUrl: result.paymentUrl,
           amountDueNow: result.amountDueNow,
           amountDueLater: result.amountDueLater,
-          currency: result.currency,
-          ...(groupPostOrderProducts.length > 0 && {
-            postOrderSuggestions: {
-              message: 'You might also enjoy these products',
-              products: groupPostOrderProducts.map((p) => ({ id: p.id, name: p.name })),
-            },
-          }),
-        },
-        products: groupPostOrderProducts.length > 0 ? groupPostOrderProducts : undefined,
+          currency: result.currency
+        }
       };
     }
 
@@ -875,6 +805,141 @@ export async function executeTool(
         return { data: goStatus };
       } catch {
         return { data: { error: `Order "${lookup}" not found. Please check the code or ID.` } };
+      }
+    }
+
+    case 'group_update_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      const newQuantityBoxes = args.newQuantityBoxes as number;
+
+      const product = await woo.getProduct(productId);
+      if (!product) {
+        return { data: { error: `Product ${productId} not found` } };
+      }
+
+      const logistics = extractProductLogistics(product);
+      if (!logistics || 'missingFields' in logistics) {
+        const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+        return { data: { error: `Cannot update "${product.name}" in group order — missing logistics fields: ${missing.join(', ')}.` } };
+      }
+
+      // MOQ check — refuse if new quantity is positive but below MOQ
+      const moqBoxes = (logistics as ProductLogistics & { moqBoxes?: number }).moqBoxes ?? 1;
+      if (newQuantityBoxes > 0 && newQuantityBoxes < moqBoxes) {
+        return {
+          data: {
+            error: `Dropping to ${newQuantityBoxes} boxes puts you below the minimum of ${moqBoxes} boxes. You'd need to either stay at the minimum of ${moqBoxes} boxes or cancel your reservation entirely. What would you like to do?`,
+            code: 'BELOW_MOQ',
+            details: { moqBoxes, requestedBoxes: newQuantityBoxes }
+          }
+        };
+      }
+
+      try {
+        // Step 1: Remove current contribution for this product
+        await removeGroupOrderItem(code, ctx.customerId, productId);
+
+        // Step 2: If new quantity > 0, re-add with desired quantity
+        if (newQuantityBoxes > 0) {
+          const newQuantityUnits = newQuantityBoxes * logistics.unitsPerBox;
+
+          const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+          const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+          const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+          const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+          const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+          const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+          const groupUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
+
+          const result = await addItemToGroupOrder({
+            code,
+            customerId: ctx.customerId,
+            product: logistics,
+            quantityUnits: newQuantityUnits,
+            productName: product.name,
+            unitPrice: groupUnitPrice,
+            imageUrl: product.images?.[0]?.src ?? null,
+            ...(hasTierPrices && { importPricePer2Boxes: importPer2, importPricePerSurface: importPerSurface }),
+          });
+
+          if (!result.success) {
+            logInfo(`group_update_item: re-add failed productId=${productId} code=${code}`, { traceId: ctx.traceId, error: result.error });
+            return { data: { error: result.error?.message ?? 'Failed to update group order reservation', details: result.error } };
+          }
+        }
+
+        const go = await getGroupOrderStatus(code);
+        return {
+          data: {
+            message: newQuantityBoxes === 0
+              ? `Reservation for "${product.name}" has been cancelled. Those boxes are now available for other participants.`
+              : `Reservation updated to ${newQuantityBoxes} boxes of "${product.name}".`,
+            ...go
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`group_update_item: error productId=${productId} code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_checkout': {
+      const code = args.code as string;
+
+      try {
+        // Validate and transition order to CHECKOUT_STARTED
+        const checkoutResult = await checkoutImportOrder(code, ctx.customerId);
+
+        if (!checkoutResult.success) {
+          return { data: { error: checkoutResult.error ?? 'Failed to initiate import order checkout' } };
+        }
+
+        // Get order status for cost calculation
+        const status = await getGroupOrderStatus(code);
+
+        // Calculate total cost from participant costs
+        const myEntry = status.participantCosts?.find(p => p.customerId === ctx.customerId);
+        if (!myEntry || parseFloat(myEntry.total) <= 0) {
+          return {
+            data: {
+              error: `No items found in import order ${code}. Add products before checking out.`
+            }
+          };
+        }
+
+        const myTotal = parseFloat(myEntry.total);
+        const payment = getPaymentAdapter();
+        const paymentResult = await payment.createCheckoutSession({
+          customerId: ctx.customerId,
+          cartTotal: myTotal,
+          currency: 'ILS',
+          splitPayment: true,
+          groupOrderId: status.id,
+          meta: {
+            importOrderCode: code,
+            products: myEntry.products,
+            orderTotal: myTotal.toFixed(2)
+          }
+        });
+
+        return {
+          data: {
+            message: `Import order ${code} checkout initiated`,
+            importOrderCode: code,
+            yourTotal: myEntry.total,
+            products: myEntry.products,
+            paymentUrl: paymentResult.paymentUrl,
+            amountDueNow: paymentResult.amountDueNow,
+            amountDueLater: paymentResult.amountDueLater,
+            currency: paymentResult.currency
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_checkout failed code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
       }
     }
 
