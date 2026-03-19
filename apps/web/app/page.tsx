@@ -43,6 +43,8 @@ type ChatMessage = {
   link?: CheckoutLink;
   groupOrder?: GroupOrderSnapshot;
   importOrder?: ImportOrderSnapshot;
+  groupOrders?: GroupOrderSnapshot[];
+  importOrders?: ImportOrderSnapshot[];
 };
 
 const HEBREW_RANGE = /[\u0590-\u05FF]/;
@@ -294,6 +296,8 @@ export default function ChatPage() {
           link: data.link,
           groupOrder: data.groupOrder,
           importOrder: data.importOrder,
+          groupOrders: data.groupOrders,
+          importOrders: data.importOrders,
         },
       ]);
     } catch {
@@ -361,10 +365,20 @@ export default function ChatPage() {
               )}
 
               {m.cart && <CartSummary cart={m.cart} onAction={handleAction} disabled={isSending} t={t} />}
-              {m.groupOrder && <GroupOrderStatus groupOrder={m.groupOrder} t={t} />}
-              {m.importOrder && (
+              {m.groupOrders && m.groupOrders.length > 0 ? (
+                m.groupOrders.map((go) => (
+                  <GroupOrderStatus key={go.code} groupOrder={go} t={t} />
+                ))
+              ) : m.groupOrder ? (
+                <GroupOrderStatus groupOrder={m.groupOrder} t={t} />
+              ) : null}
+              {m.importOrders && m.importOrders.length > 0 ? (
+                m.importOrders.map((io) => (
+                  <GroupOrderStatus key={io.code} groupOrder={io} t={t} isImportOrder />
+                ))
+              ) : m.importOrder ? (
                 <GroupOrderStatus groupOrder={m.importOrder} t={t} isImportOrder />
-              )}
+              ) : null}
               {m.link && <LinkBubble link={m.link} t={t} />}
 
               {m.suggestions && m.suggestions.length > 0 && (

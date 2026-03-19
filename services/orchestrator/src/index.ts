@@ -203,8 +203,8 @@ app.post('/api/message', async (req, res) => {
             cards: result.cards?.length ?? 0,
             hasCart: !!result.cart,
             hasLink: !!result.link,
-            hasGroupOrder: !!result.groupOrder,
-            hasImportOrder: !!result.importOrder,
+            hasGroupOrder: !!(result.groupOrder ?? result.groupOrders?.length),
+            hasImportOrder: !!(result.importOrder ?? result.importOrders?.length),
           }
         })
       ]);
@@ -226,6 +226,8 @@ app.post('/api/message', async (req, res) => {
         link: result.link,
         groupOrder: result.groupOrder,
         importOrder: result.importOrder,
+        groupOrders: result.groupOrders,
+        importOrders: result.importOrders,
       };
     } else {
       // ── Legacy: rule-based fallback (M1 behavior) ──

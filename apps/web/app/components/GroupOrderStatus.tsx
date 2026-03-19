@@ -11,13 +11,43 @@ interface Props {
 }
 
 export default function GroupOrderStatus({ groupOrder, t, isImportOrder }: Props) {
-  const progress = groupOrder.moqTarget > 0
-    ? Math.min(100, Math.round((groupOrder.moqCurrent / groupOrder.moqTarget) * 100))
-    : 0;
-  
   const hasSurfaces = groupOrder.surfaces && groupOrder.surfaces.length > 0;
   const hasItems = groupOrder.progress && groupOrder.progress.productLayers.length > 0;
   const orderLabel = isImportOrder ? t.importOrder : t.groupOrder;
+
+  const moqSurfaces = Math.max(1, groupOrder.moqSurfaces ?? groupOrder.moqTarget ?? 1);
+  const surfaceMaxLayers = groupOrder.surfaceMaxLayers ?? (hasSurfaces && groupOrder.surfaces?.length
+    ? Math.max(...groupOrder.surfaces.map((s) => s.maxLayers))
+    : 1);
+  const totalLayersForMoq = moqSurfaces * surfaceMaxLayers;
+
+  const fullLayersCount = hasSurfaces && groupOrder.surfaces
+    ? groupOrder.surfaces.reduce((sum, s) => sum + s.layers.filter((l) => l.status === 'full').length, 0)
+    : 0;
+  const progress = totalLayersForMoq > 0
+    ? Math.min(100, Math.round((fullLayersCount * 100) / totalLayersForMoq))
+    : 0;
+
+  const openBoxesTotal = hasSurfaces && groupOrder.surfaces
+    ? groupOrder.surfaces.reduce(
+        (s, surf) =>
+          s +
+          surf.layers.reduce(
+            (ls, l) => ls + (l.openBoxes ?? Math.max(0, l.capacityBoxes - l.filledBoxes)),
+            0
+          ),
+        0
+      )
+    : 0;
+
+  const surfaceLayerProgress =
+    hasSurfaces && groupOrder.surfaces
+      ? groupOrder.surfaces.map((s) => {
+          const fullLayers = s.layers.filter((l) => l.status === 'full').length;
+          const totalLayers = s.layers.length;
+          return { surfaceIndex: s.surfaceIndex, fullLayers, totalLayers, isComplete: s.status === 'full' };
+        })
+      : [];
 
   return (
     <div className="group-order-status">
@@ -25,11 +55,34 @@ export default function GroupOrderStatus({ groupOrder, t, isImportOrder }: Props
         <span className="group-order-label">{orderLabel}</span>
         <span className="group-order-code">{groupOrder.code}</span>
       </div>
-      
-      <div className="group-order-progress-bar">
-        <div className="group-order-progress-fill" style={{ width: `${progress}%` }} />
+
+      {/* Progress = full layers * 100 / (moq surfaces * layers per surface) */}
+      <div className="group-order-progress-section">
+        <div className="group-order-progress-label">
+          Layer progress
+        </div>
+        <div className="group-order-progress-bar">
+          <div className="group-order-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="group-order-progress-caption">
+          <strong>{fullLayersCount}</strong> of <strong>{totalLayersForMoq}</strong> layers accounted for.
+          {openBoxesTotal > 0 && (
+            <> <strong>{openBoxesTotal}</strong> box{openBoxesTotal !== 1 ? 'es' : ''} still available for new participants.</>
+          )}
+        </div>
+        {surfaceLayerProgress.length > 0 && surfaceLayerProgress.some((s) => !s.isComplete) && (
+          <div className="group-order-progress-per-surface">
+            {surfaceLayerProgress
+              .filter((s) => !s.isComplete)
+              .map((s) => (
+                <span key={s.surfaceIndex} className="group-order-progress-surface-line">
+                  Surface {s.surfaceIndex + 1}: {s.fullLayers} of {s.totalLayers} layers full
+                </span>
+              ))}
+          </div>
+        )}
       </div>
-      
+
       <div className="group-order-details">
         <span>{groupOrder.participantCount} {t.participants}</span>
         <span className={`group-order-badge ${groupOrder.status.toLowerCase()}`}>
@@ -43,33 +96,44 @@ export default function GroupOrderStatus({ groupOrder, t, isImportOrder }: Props
         </div>
       )}
 
-      {/* Show MOQ surfaces when no products added yet */}
+      {/* Spec: MOQ = minimum surfaces for order to ship. Empty state. */}
       {!hasSurfaces && !hasItems && (
         <div className="group-order-moq-card">
-          <div className="group-order-moq-title">MOQ Configuration</div>
+          <div className="group-order-moq-title">
+            {isImportOrder ? 'Drop-import order' : 'Group order'}
+          </div>
           <div className="group-order-moq-value">
-            MOQ Surfaces: <strong>{groupOrder.moqSurfaces}</strong> pallet{groupOrder.moqSurfaces > 1 ? 's' : ''}
+            Surface{groupOrder.moqSurfaces > 1 ? 's' : ''} to fill: <strong>{groupOrder.moqSurfaces}</strong>
+            {!isImportOrder && (
+              <span className="group-order-moq-hint-inline">
+                {' '}(order ships when all surfaces are fully committed)
+              </span>
+            )}
           </div>
           <div className="group-order-moq-hint">
-            Add products to start filling the group order
+            {isImportOrder
+              ? 'Add products in whole layers to fill your surface.'
+              : 'Add products to start filling the group order.'}
           </div>
         </div>
       )}
 
-      {/* Show detailed surface and layer information */}
+      {/* Spec 4.8: Layer table — Layer | Product | Total boxes | Used boxes | Open boxes | Status */}
       {hasSurfaces && (
         <div className="group-order-surfaces-card">
           <div className="group-order-surfaces-title">
-            Surfaces & Layers
-            {groupOrder.surfaceMaxLayers && (
+            Surface{groupOrder.surfaces && groupOrder.surfaces.length > 1 ? 's' : ''} &amp; layers
+            {groupOrder.surfaceMaxLayers != null && (
               <span className="group-order-surfaces-subtitle">
-                (Max {groupOrder.surfaceMaxLayers} layers per surface)
+                {' '}(max {groupOrder.surfaceMaxLayers} layers per surface)
               </span>
             )}
           </div>
-          
           <div className="group-order-moq-info">
-            MOQ: <strong>{groupOrder.moqSurfaces}</strong> surface{groupOrder.moqSurfaces > 1 ? 's' : ''} (pallet{groupOrder.moqSurfaces > 1 ? 's' : ''})
+            Surface{groupOrder.moqSurfaces > 1 ? 's' : ''} to ship: <strong>{groupOrder.moqSurfaces}</strong>
+            {!isImportOrder && (
+              <span> (all layers of a surface must be full)</span>
+            )}
           </div>
 
           {groupOrder.surfaces && groupOrder.surfaces.map((surface) => (
@@ -82,72 +146,76 @@ export default function GroupOrderStatus({ groupOrder, t, isImportOrder }: Props
                   {surface.status}
                 </span>
               </div>
-              
+
               {surface.layers.length === 0 ? (
                 <div className="group-order-layer-empty">No layers yet</div>
               ) : (
-                <div className="group-order-layers">
-                  {surface.layers.map((layer) => (
-                    <div key={layer.layerIndex} className="group-order-layer">
-                      <div className="group-order-layer-header">
-                        <span className="group-order-layer-title">
-                          Layer {layer.layerIndex + 1}
-                        </span>
-                        <span className={`group-order-layer-status ${layer.status}`}>
-                          {layer.status}
-                        </span>
-                      </div>
-                      <div className="group-order-layer-content">
-                        <div className="group-order-layer-product">
-                          Product: <strong>{layer.productName || layer.productId}</strong>
-                        </div>
-                        <div className="group-order-layer-stats">
-                          <span>
-                            {layer.filledUnits} units ({layer.filledBoxes} box{layer.filledBoxes !== 1 ? 'es' : ''})
-                          </span>
-                          <span className="group-order-layer-dot">•</span>
-                          <span>
-                            Capacity: {layer.capacityBoxes} box{layer.capacityBoxes !== 1 ? 'es' : ''}
-                          </span>
-                          {layer.unitPrice && (
-                            <>
-                              <span className="group-order-layer-dot">•</span>
-                              <span className="group-order-layer-price">
-                                ₪{layer.unitPrice}/unit
-                                {layer.capacityUnits > 0 && (
-                                  <span className="group-order-layer-price-total">
-                                    {' '}(₪{(parseFloat(layer.unitPrice) * layer.capacityUnits).toFixed(2)} full layer)
-                                  </span>
-                                )}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                <div className="group-order-layer-table-wrap">
+                  <table className="group-order-layer-table">
+                    <thead>
+                      <tr>
+                        <th>Layer</th>
+                        <th>Product</th>
+                        <th>Total boxes</th>
+                        <th>Used boxes</th>
+                        <th>Open boxes</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {surface.layers.map((layer) => {
+                        const openBoxes = layer.openBoxes ?? Math.max(0, layer.capacityBoxes - layer.filledBoxes);
+                        const statusLabel =
+                          layer.status === 'full'
+                            ? 'Full'
+                            : (layer.participantCount != null && layer.participantCount > 0
+                                ? `Open, ${layer.participantCount} user${layer.participantCount !== 1 ? 's' : ''}`
+                                : 'Open');
+                        return (
+                          <tr key={layer.layerIndex} className="group-order-layer-row">
+                            <td>Layer {layer.layerIndex + 1}</td>
+                            <td><strong>{layer.productName || layer.productId}</strong></td>
+                            <td>{layer.capacityBoxes}</td>
+                            <td>{layer.filledBoxes}</td>
+                            <td>{openBoxes}</td>
+                            <td className={`group-order-layer-status ${layer.status}`}>
+                              {statusLabel}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
           ))}
+          {groupOrder.surfaces && (
+            <div className="group-order-surface-summary">
+              {fullLayersCount} of {totalLayersForMoq} layers accounted for.{' '}
+              {openBoxesTotal} box{openBoxesTotal !== 1 ? 'es' : ''} still available for new participants.
+            </div>
+          )}
         </div>
       )}
 
-      {/* Fallback: Show old progress format if surfaces not available but items exist */}
+      {/* Fallback: progress only (no surface/layer detail yet) */}
       {!hasSurfaces && hasItems && (
         <div className="group-order-layer-card">
-          <div className="group-order-layer-title">Products Added</div>
+          <div className="group-order-layer-title">
+            {isImportOrder ? 'Products on surface' : 'Products added'}
+          </div>
           <div className="group-order-moq-info">
-            MOQ: <strong>{groupOrder.moqSurfaces}</strong> surface{groupOrder.moqSurfaces > 1 ? 's' : ''}
+            Surface{groupOrder.moqSurfaces > 1 ? 's' : ''} to ship: <strong>{groupOrder.moqSurfaces}</strong>
           </div>
           <div className="group-order-layer-list">
             {groupOrder.progress?.productLayers.map((layer, idx) => (
               <div className="group-order-layer-item" key={layer.productId}>
                 <div className="group-order-layer-product-name">
-                  Product {idx + 1}: {layer.productId}
+                  {layer.productId}
                 </div>
                 <div className="group-order-layer-stats">
-                  {layer.quantity} units ({Math.ceil(layer.quantity / layer.boxesPerLayer)} box{Math.ceil(layer.quantity / layer.boxesPerLayer) !== 1 ? 'es' : ''})
+                  {layer.quantity} units ({Math.ceil(layer.quantity / (layer.boxesPerLayer || 1))} box{Math.ceil(layer.quantity / (layer.boxesPerLayer || 1)) !== 1 ? 'es' : ''})
                 </div>
               </div>
             ))}

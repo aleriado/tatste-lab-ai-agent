@@ -20,6 +20,8 @@ export interface ProductLogistics {
   boxesPerLayer: number;
   layersPerSurface: number;
   boxesPerSurface?: number; // derived as boxes_per_layer * layers_per_surface if missing
+  /** Minimum boxes a single user must commit to (group orders). Max users per layer = floor(boxesPerLayer / moqBoxes). If unset, service uses GROUP_ORDER_DEFAULT_MOQ_BOXES. */
+  moqBoxes?: number;
 }
 
 export interface AllocationInput {
@@ -41,7 +43,7 @@ export interface AllocationResult {
 }
 
 export interface AllocationError {
-  code: 'MANUFACTURER_MISMATCH' | 'INVALID_QUANTITY' | 'OVERFLOW' | 'LAYER_LIMIT_CONFLICT' | 'MISSING_LOGISTICS' | 'INVALID_STATE';
+  code: 'MANUFACTURER_MISMATCH' | 'INVALID_QUANTITY' | 'OVERFLOW' | 'LAYER_LIMIT_CONFLICT' | 'MISSING_LOGISTICS' | 'INVALID_STATE' | 'BELOW_MOQ' | 'LAYER_FULL_PARTICIPANTS';
   message: string;
   details: Record<string, unknown>;
 }
@@ -77,6 +79,10 @@ export interface LayerState {
   filledBoxes: number;
   filledUnits: number;
   status: string;
+  /** Distinct participants who have committed to this layer (from contributions). Used for max users per layer = floor(boxesPerLayer / moqBoxes). */
+  participantCount: number;
+  /** Customer IDs with contributions in this layer. Used to check if current user already in layer when enforcing cap. */
+  participantCustomerIds: string[];
 }
 
 export interface LayerContribution {

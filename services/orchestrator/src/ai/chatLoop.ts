@@ -8,10 +8,19 @@ import type { DetectedLanguage } from './languageHandler';
 import { stripPricesForCatalogExtension } from './interventionGates';
 import type { WooProduct } from '../adapters/woocommerce';
 import type { CartSummary } from '@taste-labs/db';
+import { getGroupOrderStatus } from '@taste-labs/db';
 import type { ProductCard, CartSnapshot, GroupOrderSnapshot, ImportOrderSnapshot, CheckoutLink } from '@taste-labs/shared';
 import { logInfo, logError } from '../logger';
 
 const MAX_TOOL_ROUNDS = 6;
+
+/** Remove em dashes and en dashes from model output so they never reach the user. */
+function sanitizeReplyForDisplay(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(/\u2014/g, ', ')   // em dash —
+    .replace(/\u2013/g, ', ');  // en dash –
+}
 
 export interface ChatLoopInput {
   userMessage: string;
@@ -28,6 +37,9 @@ export interface ChatLoopResult {
   link?: CheckoutLink;
   groupOrder?: GroupOrderSnapshot;
   importOrder?: ImportOrderSnapshot;
+  /** When user asks for all group/import orders status, these arrays are populated. */
+  groupOrders?: GroupOrderSnapshot[];
+  importOrders?: ImportOrderSnapshot[];
   detectedLanguage?: 'he' | 'en';
 }
 
@@ -123,10 +135,59 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
   let collectedCards: ProductCard[] = [];
   let collectedCart: CartSnapshot | undefined;
   let collectedLink: CheckoutLink | undefined;
-  let collectedGroupOrder: GroupOrderSnapshot | undefined;
-  let collectedImportOrder: ImportOrderSnapshot | undefined;
+  let collectedGroupOrders: GroupOrderSnapshot[] = [];
+  let collectedImportOrders: ImportOrderSnapshot[] = [];
   // Prevent duplicate cart_add_item calls for the same product within one request
   const addedProductIds = new Set<string>();
+
+  function toGroupSnapshot(go: {
+    code: string; status: string; moqCurrent: number; moqTarget: number; participantCount: number;
+    moqSurfaces?: number | null; surfaceMaxLayers?: number | null; manufacturer?: string | null;
+    expiresAt?: Date | string | null; progress?: GroupOrderSnapshot['progress']; surfaces?: GroupOrderSnapshot['surfaces'];
+    participantCosts?: GroupOrderSnapshot['participantCosts']; surfaceStatusSummary?: GroupOrderSnapshot['surfaceStatusSummary'];
+  }): GroupOrderSnapshot {
+    const expiresAt = go.expiresAt != null ? (typeof go.expiresAt === 'string' ? go.expiresAt : (go.expiresAt as Date).toISOString()) : undefined;
+    return {
+      code: go.code,
+      status: go.status,
+      moqCurrent: go.moqCurrent,
+      moqTarget: go.moqTarget,
+      moqSurfaces: go.moqSurfaces ?? 1,
+      surfaceMaxLayers: go.surfaceMaxLayers ?? undefined,
+      manufacturer: go.manufacturer ?? undefined,
+      participantCount: go.participantCount,
+      expiresAt,
+      progress: go.progress,
+      surfaces: go.surfaces,
+      participantCosts: go.participantCosts,
+      surfaceStatusSummary: go.surfaceStatusSummary,
+    };
+  }
+  function toImportSnapshot(go: {
+    code: string; status: string; moqTarget: number;
+    moqCurrent?: number; participantCount?: number; moqSurfaces?: number | null; surfaceMaxLayers?: number | null;
+    manufacturer?: string | null; expiresAt?: Date | string | null; progress?: GroupOrderSnapshot['progress'];
+    surfaces?: GroupOrderSnapshot['surfaces']; participantCosts?: GroupOrderSnapshot['participantCosts'];
+    surfaceStatusSummary?: GroupOrderSnapshot['surfaceStatusSummary'];
+  }): ImportOrderSnapshot {
+    return {
+      ...toGroupSnapshot({
+        ...go,
+        moqCurrent: (go.moqCurrent as number | undefined) ?? 0,
+        participantCount: (go.participantCount as number | undefined) ?? 1,
+      }),
+      isImport: true,
+    };
+  }
+  function upsertByCode<T extends { code: string }>(arr: T[], item: T): T[] {
+    const i = arr.findIndex((x) => x.code === item.code);
+    if (i >= 0) {
+      const out = [...arr];
+      out[i] = item;
+      return out;
+    }
+    return [...arr, item];
+  }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     logInfo(`Chat loop round ${round + 1}`, { traceId: toolContext.traceId, model });
@@ -142,7 +203,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
     const choice = response.choices[0];
     if (!choice) {
       logError('No choice in OpenAI response', { traceId: toolContext.traceId });
-      return { reply: 'I had trouble processing that. Could you try again?' };
+      return { reply: sanitizeReplyForDisplay('I had trouble processing that. Could you try again?') };
     }
 
     const assistantMessage = choice.message;
@@ -150,7 +211,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
 
     // If no tool calls, we have the final reply
     if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-      const reply = assistantMessage.content ?? '';
+      const reply = sanitizeReplyForDisplay(assistantMessage.content ?? '');
 
       // M2: AIS-04 — strip prices from CATALOG_EXTENSION products before sending to frontend
       const sanitizedCards = collectedCards.map(stripPricesForCatalogExtension);
@@ -163,8 +224,10 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
         cart: collectedCart,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         link: collectedLink,
-        groupOrder: collectedGroupOrder,
-        importOrder: collectedImportOrder,
+        groupOrder: collectedGroupOrders[0],
+        importOrder: collectedImportOrders[0],
+        groupOrders: collectedGroupOrders.length > 0 ? collectedGroupOrders : undefined,
+        importOrders: collectedImportOrders.length > 0 ? collectedImportOrders : undefined,
         detectedLanguage: detectedLang,
       };
     }
@@ -222,43 +285,70 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
           };
         }
 
-        // Collect group order status (non-import group orders)
-        if (data?.code && data?.moqTarget !== undefined && !data?.isImport) {
-          collectedGroupOrder = {
-            code: data.code,
-            status: data.status,
-            moqCurrent: data.moqCurrent,
-            moqTarget: data.moqTarget,
-            moqSurfaces: data.moqSurfaces ?? 1,
-            surfaceMaxLayers: data.surfaceMaxLayers ?? undefined,
-            manufacturer: data.manufacturer ?? undefined,
-            participantCount: data.participantCount,
-            expiresAt: data.expiresAt ?? undefined,
-            progress: data.progress ?? undefined,
-            surfaces: data.surfaces ?? undefined,
-            participantCosts: data.participantCosts ?? undefined
-          };
+        // Collect single group order status (group_status returns one)
+        if (fnName === 'group_status' && data?.code && data?.moqTarget !== undefined && !data?.isImport) {
+          collectedGroupOrders = upsertByCode(collectedGroupOrders, toGroupSnapshot(data));
         }
 
-        // M2: Collect import order snapshot (same shape as group order for unified status UI)
-        if (data?.isImport === true && data?.code) {
-          collectedImportOrder = {
-            code: data.code,
-            status: data.status,
-            moqCurrent: data.moqCurrent ?? 0,
-            moqTarget: data.moqTarget ?? data.moqSurfaces ?? 1,
-            moqSurfaces: data.moqSurfaces ?? 1,
-            surfaceMaxLayers: data.surfaceMaxLayers ?? undefined,
-            manufacturer: data.manufacturer ?? undefined,
-            participantCount: data.participantCount ?? 1,
-            expiresAt: data.expiresAt != null
-              ? (typeof data.expiresAt === 'string' ? data.expiresAt : (data.expiresAt as Date).toISOString())
-              : undefined,
-            progress: data.progress ?? undefined,
-            surfaces: data.surfaces ?? undefined,
-            participantCosts: data.participantCosts ?? undefined,
-            isImport: true,
-          };
+        // Collect single import order status (import_order_status returns one)
+        if (fnName === 'import_order_status' && data?.isImport === true && data?.code) {
+          collectedImportOrders = upsertByCode(collectedImportOrders, toImportSnapshot(data));
+        }
+
+        // When user asks for all group orders: group_discover returns list — fetch full status for each and show all
+        if (fnName === 'group_discover' && data?.orders?.length > 0) {
+          try {
+            const orders = data.orders as { code: string }[];
+            const snapshots: GroupOrderSnapshot[] = [];
+            for (const o of orders) {
+              if (!o?.code) continue;
+              try {
+                const go = await getGroupOrderStatus(o.code);
+                if (!go.isImport) snapshots.push(toGroupSnapshot(go));
+              } catch (e) {
+                logInfo('group_discover: skip failed status fetch', { traceId: toolContext.traceId, code: o.code, err: e });
+              }
+            }
+            if (snapshots.length > 0) collectedGroupOrders = snapshots;
+          } catch (e) {
+            logInfo('group_discover: could not load all order statuses', { traceId: toolContext.traceId, err: e });
+          }
+        }
+
+        // When user asks for all import orders: import_order_list returns list — fetch full status for each and show all
+        if (fnName === 'import_order_list' && data?.orders?.length > 0) {
+          try {
+            const orders = data.orders as { code: string }[];
+            const snapshots: ImportOrderSnapshot[] = [];
+            for (const o of orders) {
+              if (!o?.code) continue;
+              try {
+                const go = await getGroupOrderStatus(o.code);
+                if (go.isImport) snapshots.push(toImportSnapshot(go));
+              } catch (e) {
+                logInfo('import_order_list: skip failed status fetch', { traceId: toolContext.traceId, code: o.code, err: e });
+              }
+            }
+            if (snapshots.length > 0) collectedImportOrders = snapshots;
+          } catch (e) {
+            logInfo('import_order_list: could not load all order statuses', { traceId: toolContext.traceId, err: e });
+          }
+        }
+
+        // Other tools that return full status (group_add_item, group_join, order_status, etc.): add so block is shown
+        const listTools = ['group_discover', 'import_order_list'];
+        const singleStatusTools = ['group_status', 'import_order_status'];
+        if (
+          data?.code &&
+          data?.moqTarget !== undefined &&
+          !listTools.includes(fnName) &&
+          !singleStatusTools.includes(fnName)
+        ) {
+          if (data?.isImport === true) {
+            collectedImportOrders = upsertByCode(collectedImportOrders, toImportSnapshot(data));
+          } else {
+            collectedGroupOrders = upsertByCode(collectedGroupOrders, toGroupSnapshot(data));
+          }
         }
 
         messages.push({
@@ -279,7 +369,7 @@ export async function runChatLoop(input: ChatLoopInput): Promise<ChatLoopResult>
 
   // If we exhausted rounds, return whatever we have
   logError('Chat loop exhausted max rounds', { traceId: toolContext.traceId });
-  return { reply: 'I ran into a complex situation. Could you simplify your request?' };
+  return { reply: sanitizeReplyForDisplay('I ran into a complex situation. Could you simplify your request?') };
 }
 
 function generateSuggestions(cards: ProductCard[], cart?: CartSnapshot): string[] {

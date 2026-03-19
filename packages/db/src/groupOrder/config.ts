@@ -25,3 +25,14 @@ export function getImportOrderMoqSurfaces(): number {
   }
   return getGroupOrderConfig().defaultMoqSurfaces;
 }
+
+/**
+ * Group order MOQ in boxes (minimum boxes a single user must commit to per product).
+ * Spec: "In group orders: the minimum number of boxes a single user must commit to."
+ * Set via GROUP_ORDER_DEFAULT_MOQ_BOXES (default 1). Used for validation and max users per layer.
+ */
+export function getGroupOrderMoqBoxes(): number {
+  const raw = process.env.GROUP_ORDER_DEFAULT_MOQ_BOXES ?? '1';
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}

@@ -416,11 +416,17 @@ export interface GroupOrderFull {
       filledBoxes: number;
       filledUnits: number;
       status: string;
+      /** Open boxes (capacity minus filled). Spec: "Open boxes" column. */
+      openBoxes: number;
+      /** Distinct participants in this layer. Spec: "Open, N users" status. */
+      participantCount: number;
     }[];
   }[];
   participantCosts?: { customerId: string; total: string; products: { name: string; units: number; cost: string }[] }[];
   /** True when this is a single-user import order (same model as group order, maxParticipants=1). */
   isImport?: boolean;
+  /** Spec 4.8: Ready-to-use summary for bot reply. "[layersAccountedFor] of [totalLayers] layers accounted for. [boxesAvailable] boxes still available for new participants." */
+  surfaceStatusSummary?: { layersAccountedFor: number; totalLayers: number; boxesAvailable: number };
 }
 
 export interface AddGroupOrderItemInput {
@@ -711,13 +717,16 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
     participantProductUnitPrice.set(participantKey, Number(item.unitPrice));
   }
 
-  // Add surface and layer information with product names and prices
+  // Add surface and layer information with product names and prices (spec: Layer table with Total/Used/Open boxes, Status)
   const surfaceDetails = go.surfaces.map(surface => ({
     surfaceIndex: surface.surfaceIndex,
     maxLayers: surface.maxLayers,
     status: surface.status,
     layers: surface.layers.map(layer => {
       const key = `${layer.productId}:${layer.variantId ?? ''}`;
+      const contributions = (layer.contributions as Array<{ customerId: string }> | null) ?? [];
+      const participantCount = new Set(contributions.map(c => c.customerId)).size;
+      const openBoxes = Math.max(0, layer.capacityBoxes - layer.filledBoxes);
       return {
         layerIndex: layer.layerIndex,
         productId: layer.productId,
@@ -728,7 +737,9 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
         capacityUnits: layer.capacityUnits,
         filledBoxes: layer.filledBoxes,
         filledUnits: layer.filledUnits,
-        status: layer.status
+        status: layer.status,
+        openBoxes,
+        participantCount
       };
     })
   }));
@@ -771,16 +782,31 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
     }))
   }));
 
+  const totalLayersForMoq = (go.moqSurfaces ?? 1) * (go.surfaceMaxLayers ?? 1);
+  const layersAccountedFor = surfaceDetails.reduce(
+    (sum, s) => sum + s.layers.filter((l) => l.status === 'full').length,
+    0
+  );
+  const boxesAvailable = surfaceDetails.reduce(
+    (sum, s) => sum + s.layers.reduce((ls, l) => ls + l.openBoxes, 0),
+    0
+  );
+  const surfaceStatusSummary = {
+    layersAccountedFor,
+    totalLayers: totalLayersForMoq,
+    boxesAvailable
+  };
+
   return {
-    id: go.id, 
-    code: go.code, 
-    status: effectiveStatus, 
+    id: go.id,
+    code: go.code,
+    status: effectiveStatus,
     moqTarget,
     moqCurrent: liveMoqCurrent,
     moqSurfaces: go.moqSurfaces,
     surfaceMaxLayers: go.surfaceMaxLayers,
     manufacturer: go.manufacturerId,
-    expiresAt: go.expiresAt, 
+    expiresAt: go.expiresAt,
     createdByCustomerId: go.createdByCustomerId,
     participants: go.participants,
     items: go.items.map((i) => ({ ...i, unitPrice: Number(i.unitPrice).toFixed(2) })),
@@ -789,6 +815,7 @@ export async function getGroupOrderStatus(code: string): Promise<GroupOrderFull>
     surfaces: surfaceDetails,
     participantCosts: participantSummary,
     isImport: go.isImport ?? false,
+    surfaceStatusSummary,
   };
 }
 

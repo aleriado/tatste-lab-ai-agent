@@ -143,6 +143,10 @@ export interface GroupOrderSnapshot {
       filledBoxes: number;
       filledUnits: number;
       status: string;
+      /** Open boxes (capacity minus filled). Spec surface table. */
+      openBoxes?: number;
+      /** Participants in this layer. Spec: "Open, N users". */
+      participantCount?: number;
     }[];
   }[];
   participantCosts?: {
@@ -150,6 +154,8 @@ export interface GroupOrderSnapshot {
     total: string;
     products: { name: string; units: number; cost: string }[];
   }[];
+  /** Spec 4.8: For surface status reply. Use: "[layersAccountedFor] of [totalLayers] layers accounted for. [boxesAvailable] boxes still available for new participants." */
+  surfaceStatusSummary?: { layersAccountedFor: number; totalLayers: number; boxesAvailable: number };
 }
 
 export interface CheckoutLink {
@@ -213,8 +219,10 @@ export interface OrderTypeOption {
   pricePerUnit?: string;
   /** Minimum order quantity in units (for this product: moqBoxes * unitsPerBox). */
   moq?: number;
-  /** Minimum order quantity in boxes (stock orders). Use this for display. */
+  /** Minimum order quantity in boxes (stock orders, or group orders per-user MOQ). Use this for display. */
   moqBoxes?: number;
+  /** Group orders only: max users who can share one layer = floor(boxesPerLayer / moqBoxes). */
+  maxUsersPerLayer?: number;
   existingOrders?: {
     code: string;
     progress: string;
@@ -230,6 +238,8 @@ export interface AvailableOrderTypes {
   types: OrderTypeOption[];
   /** Units per box for this product. Use to convert "X boxes" to quantity: quantity = X * unitsPerBox when calling group_add_item / import_add_item. */
   unitsPerBox?: number;
+  /** Boxes per layer. For drop-import, convert "X layers" to quantity: quantity = X * boxesPerLayer * unitsPerBox. */
+  boxesPerLayer?: number;
 }
 
 export interface ImportOrderStatus {
@@ -262,4 +272,7 @@ export interface OrchestratorReply {
   link?: CheckoutLink;
   groupOrder?: GroupOrderSnapshot;
   importOrder?: ImportOrderSnapshot;
+  /** All group orders when user asks for "all" group/import orders status. */
+  groupOrders?: GroupOrderSnapshot[];
+  importOrders?: ImportOrderSnapshot[];
 }

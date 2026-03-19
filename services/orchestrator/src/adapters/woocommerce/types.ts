@@ -92,6 +92,8 @@ export type SearchFilters = {
   limit?: number;
   maxPrice?: number;
   minPrice?: number;
+  /** Only return products from this manufacturer (e.g. for import/group order by manufacturer). */
+  manufacturer?: string;
 };
 
 export interface WooCommerceAdapter {
