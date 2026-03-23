@@ -615,7 +615,6 @@ interface CulinaryRecommendationResult {
  * Used for keyword matching against product names, categories, and descriptions.
  */
 const CULINARY_KEYWORD_MAP: Record<string, string[]> = {
-  // ── Core cooking contexts ──
   pasta: ['pasta', 'sauce', 'tomato', 'olive oil', 'parmesan', 'cheese', 'basil', 'garlic', 'oregano'],
   bread: ['flour', 'yeast', 'bread', 'butter', 'olive oil', 'salt', 'sesame', 'sourdough'],
   pizza: ['pizza', 'flour', 'tomato', 'mozzarella', 'cheese', 'olive oil', 'basil', 'oregano', 'yeast'],
@@ -626,53 +625,6 @@ const CULINARY_KEYWORD_MAP: Record<string, string[]> = {
   soup: ['broth', 'stock', 'lentil', 'bean', 'spice', 'herbs', 'cream', 'noodle'],
   stir_fry: ['soy sauce', 'sesame oil', 'rice', 'noodle', 'ginger', 'garlic', 'chili'],
   hummus: ['chickpea', 'tahini', 'lemon', 'garlic', 'olive oil', 'cumin', 'paprika'],
-
-  // ── Italian & Mediterranean ──
-  italian: ['pasta', 'olive oil', 'tomato', 'parmesan', 'basil', 'oregano', 'prosciutto', 'pesto', 'risotto', 'mozzarella'],
-  mediterranean: ['olive oil', 'lemon', 'garlic', 'herbs', 'olives', 'tomato', 'tahini', 'feta', 'oregano', 'capers'],
-  risotto: ['rice', 'parmesan', 'butter', 'olive oil', 'broth', 'herbs', 'garlic', 'cream'],
-  pesto: ['basil', 'olive oil', 'parmesan', 'garlic', 'pine nuts', 'pasta'],
-  antipasto: ['olive oil', 'olives', 'capers', 'tomato', 'cheese', 'prosciutto', 'herbs'],
-
-  // ── Middle Eastern / Israeli ──
-  middle_eastern: ['tahini', 'olive oil', 'chickpea', 'lentil', 'spice', 'herbs', 'cumin', 'sumac', 'za\'atar', 'paprika'],
-  // Hebrew food terms
-  'שבת': ['olive oil', 'herbs', 'spice', 'honey', 'tahini', 'sauce'],
-  'פסטה': ['pasta', 'sauce', 'tomato', 'olive oil', 'cheese', 'basil'],
-  'סלט': ['olive oil', 'lemon', 'vinegar', 'tahini', 'herbs', 'dressing'],
-  'אפייה': ['flour', 'sugar', 'butter', 'vanilla', 'chocolate', 'cocoa'],
-  'צלייה': ['spice', 'marinade', 'olive oil', 'sauce', 'seasoning', 'herbs'],
-  'ממרח': ['tahini', 'olive oil', 'garlic', 'spice', 'lemon', 'herbs'],
-  'חומוס': ['chickpea', 'tahini', 'lemon', 'garlic', 'olive oil', 'cumin', 'paprika'],
-
-  // ── Fish & Seafood ──
-  fish: ['olive oil', 'lemon', 'garlic', 'herbs', 'capers', 'tomato', 'spice', 'sauce'],
-  seafood: ['olive oil', 'lemon', 'garlic', 'herbs', 'capers', 'butter', 'cream', 'spice'],
-
-  // ── Desserts & Sweet ──
-  dessert: ['chocolate', 'vanilla', 'sugar', 'butter', 'cream', 'cocoa', 'honey', 'nuts', 'caramel'],
-  chocolate: ['chocolate', 'cocoa', 'vanilla', 'cream', 'butter', 'sugar', 'nuts'],
-  cake: ['flour', 'sugar', 'butter', 'eggs', 'vanilla', 'chocolate', 'cream', 'cocoa'],
-
-  // ── Breakfast & Brunch ──
-  breakfast: ['olive oil', 'cheese', 'honey', 'jam', 'butter', 'tahini', 'bread', 'herbs'],
-  brunch: ['cheese', 'olive oil', 'tomato', 'herbs', 'honey', 'jam', 'butter', 'eggs'],
-
-  // ── Drinks & Condiments ──
-  coffee: ['coffee', 'chocolate', 'vanilla', 'cream', 'cocoa', 'sugar'],
-  dips: ['tahini', 'olive oil', 'lemon', 'garlic', 'spice', 'herbs', 'yogurt', 'chickpea'],
-  sauce: ['tomato', 'olive oil', 'garlic', 'basil', 'herbs', 'spice', 'cream', 'butter'],
-
-  // ── Dietary styles ──
-  vegan: ['olive oil', 'tahini', 'lemon', 'chickpea', 'lentil', 'nuts', 'herbs', 'spice', 'tomato'],
-  vegetarian: ['olive oil', 'cheese', 'tomato', 'herbs', 'spice', 'lemon', 'garlic', 'tahini'],
-  healthy: ['olive oil', 'lemon', 'herbs', 'spice', 'lentil', 'chickpea', 'tahini', 'nuts'],
-
-  // ── Other cuisine contexts ──
-  barbecue: ['spice', 'marinade', 'sauce', 'olive oil', 'garlic', 'herbs', 'seasoning', 'chili'],
-  stew: ['olive oil', 'tomato', 'garlic', 'herbs', 'spice', 'lentil', 'bean', 'broth'],
-  cheese: ['cheese', 'olive oil', 'herbs', 'honey', 'nuts', 'crackers', 'fig'],
-  asian: ['soy sauce', 'sesame oil', 'rice', 'noodle', 'ginger', 'garlic', 'chili', 'vinegar'],
 };
 
 /**
