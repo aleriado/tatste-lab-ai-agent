@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { consumeLinkCode } from '@taste-labs/db';
-import { sendTelegramMessage } from './sender';
+import { sendTelegramMessage, sendTelegramMediaGroup } from './sender';
 import { logInfo, logError } from '../../logger';
 
 interface TelegramUpdate {
@@ -13,11 +13,16 @@ interface TelegramUpdate {
   };
 }
 
+interface CardLike {
+  name?: string;
+  imageUrl?: string;
+}
+
 type ProcessMessageFn = (payload: {
   channel: 'telegram';
   channel_user_id: string;
   text: string;
-}) => Promise<{ reply: string }>;
+}) => Promise<{ reply: string; cards?: CardLike[] }>;
 
 /**
  * Factory that returns an Express route handler for POST /webhooks/telegram.
@@ -71,6 +76,13 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
 
       const result = await processMessage({ channel: 'telegram', channel_user_id: chatId, text });
       await sendTelegramMessage(chatId, result.reply);
+
+      const imageItems = (result.cards ?? [])
+        .filter((c): c is CardLike & { imageUrl: string } => !!c.imageUrl)
+        .map((c) => ({ imageUrl: c.imageUrl, caption: c.name }));
+      if (imageItems.length > 0) {
+        await sendTelegramMediaGroup(chatId, imageItems);
+      }
     } catch (err) {
       logError('Telegram webhook error', { chatId, err });
       try {
