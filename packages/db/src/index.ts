@@ -23,6 +23,9 @@ export {
   getImportOrderStatus,
   checkoutImportOrder,
 } from './groupOrder/importOrderService';
+
+// ─── M3: Link codes ───
+export { createLinkCode, consumeLinkCode } from './linkCode';
 export type {
   ImportOrderStatus,
   AddItemToImportOrderResult,

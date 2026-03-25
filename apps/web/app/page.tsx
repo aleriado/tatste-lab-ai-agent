@@ -34,6 +34,7 @@ export interface UiText {
   cartLabelGeneral: string; cartLabelStock: string;
   dueNow: string; dueLater: string;
   groupOrder: string; importOrder: string; expires: string; participants: string;
+  connectTelegram: string; telegramCode: string; telegramInstructions: string; openTelegram: string; telegramCodeExpires: string; telegramLinked: string; telegramConnecting: string;
 }
 
 type ChatMessage = {
@@ -72,20 +73,7 @@ function isNumbersOnly(text: string): boolean {
 const ORCHESTRATOR_BASE =
   process.env.NEXT_PUBLIC_ORCHESTRATOR_URL ?? "http://localhost:5501";
 
-const UI_TEXT: Record<Lang, {
-  title: string; subtitle: string; placeholder: string; send: string;
-  welcome: string; suggest1: string; suggest2: string; suggest3: string; suggest4: string; suggest5: string;
-  thinking: string; error: string;
-  purchase: string; details: string; inStock: string; outOfStock: string;
-  productSpec: string; manufacturer: string; brand: string; countryOfOrigin: string; sku: string; barcode: string; weight: string;
-  stockUnits: string; unitsPerBox: string; boxesPerLayer: string; layersPerSurface: string; boxesPerSurface: string; moqBoxes: string;
-  notAvailable: string;
-  shoppingCart: string; items: string; total: string; checkout: string;
-  clearCart: string; emptyCart: string; completePayment: string;
-  cartLabelGeneral: string; cartLabelStock: string;
-  dueNow: string; dueLater: string;
-  groupOrder: string; importOrder: string; expires: string; participants: string;
-}> = {
+const UI_TEXT: Record<Lang, UiText> = {
   en: {
     title: "Taste Labs Concierge",
     subtitle: "AI Shopping Assistant",
@@ -132,6 +120,13 @@ const UI_TEXT: Record<Lang, {
     importOrder: "Import Order",
     expires: "Expires",
     participants: "participants",
+    connectTelegram: "Continue on Telegram",
+    telegramCode: "Your link code",
+    telegramInstructions: "Tap the button below, or send this code to the bot manually.",
+    openTelegram: "Open in Telegram",
+    telegramCodeExpires: "Expires in 5 min",
+    telegramLinked: "Telegram",
+    telegramConnecting: "Generating...",
   },
   he: {
     title: "טייסט לאבס קונסיירז'",
@@ -179,6 +174,13 @@ const UI_TEXT: Record<Lang, {
     importOrder: "הזמנת ייבוא",
     expires: "פג תוקף",
     participants: "משתתפים",
+    connectTelegram: "המשך בטלגרם",
+    telegramCode: "קוד החיבור שלך",
+    telegramInstructions: "לחץ על הכפתור למטה, או שלח את הקוד לבוט ידנית.",
+    openTelegram: "פתח בטלגרם",
+    telegramCodeExpires: "פג תוקף בעוד 5 דק'",
+    telegramLinked: "טלגרם",
+    telegramConnecting: "מייצר...",
   },
 };
 
@@ -232,6 +234,12 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sendLockRef = useRef(false);
+
+  const [telegramPanel, setTelegramPanel] = useState<{
+    code: string;
+    botUrl: string | null;
+    expiresAt: number; // timestamp ms
+  } | null>(null);
 
   function tr(text: string): string {
     return text
@@ -335,6 +343,26 @@ export default function ChatPage() {
     sendMessage(text);
   }
 
+  async function handleConnectTelegram() {
+    if (telegramPanel) { setTelegramPanel(null); return; }
+    try {
+      const res = await fetch(`${ORCHESTRATOR_BASE}/api/link-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel_user_id: channelUserId }),
+      });
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      setTelegramPanel({
+        code: data.code,
+        botUrl: data.bot_url,
+        expiresAt: Date.now() + (data.expires_in ?? 300) * 1000,
+      });
+    } catch {
+      // silently fail — button just does nothing if orchestrator unreachable
+    }
+  }
+
   return (
     <div className="chat-container">
       <div className="chat-card" dir={lang === "he" ? "rtl" : "ltr"}>
@@ -344,9 +372,41 @@ export default function ChatPage() {
             <div className="chat-subtitle">{t.subtitle}</div>
           </div>
           <div className="header-actions">
-            <span className="chat-badge">M2</span>
+            <button
+              className={`telegram-connect-btn${telegramPanel ? ' active' : ''}`}
+              onClick={handleConnectTelegram}
+              title={t.connectTelegram}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.912l-2.965-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.983.647z"/>
+              </svg>
+              <span>{t.connectTelegram}</span>
+            </button>
+            <span className="chat-badge">M3</span>
           </div>
         </div>
+
+        {telegramPanel && (
+          <div className="telegram-panel">
+            <div className="telegram-panel-header">
+              <span>{t.telegramCode}</span>
+              <button className="telegram-panel-close" onClick={() => setTelegramPanel(null)}>×</button>
+            </div>
+            <div className="telegram-panel-code">{telegramPanel.code}</div>
+            <p className="telegram-panel-instructions">{t.telegramInstructions}</p>
+            {telegramPanel.botUrl && (
+              <a
+                className="telegram-open-btn"
+                href={telegramPanel.botUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t.openTelegram}
+              </a>
+            )}
+            <span className="telegram-panel-expiry">{t.telegramCodeExpires}</span>
+          </div>
+        )}
 
         <div className="chat-messages">
           {messages.map((m, idx) => {

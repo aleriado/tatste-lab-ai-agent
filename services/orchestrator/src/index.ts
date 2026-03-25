@@ -14,6 +14,8 @@ import {
   Thread,
   updateThreadContext
 } from '@taste-labs/db';
+import { createLinkCode } from '@taste-labs/db';
+import { createTelegramWebhookHandler } from './channels/telegram/webhook';
 import type { OrchestratorReply } from '@taste-labs/shared';
 import { runChatLoop } from './ai/chatLoop';
 import { syncHubspotForIntent } from './adapters/hubspot';
@@ -103,6 +105,198 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', mode: hasOpenAI() ? 'ai' : 'legacy' });
 });
 
+async function processMessage(
+  payload: {
+    channel: 'web' | 'whatsapp' | 'telegram';
+    channel_user_id: string;
+    text: string;
+    email?: string | null;
+    phone?: string | null;
+    groupOrderCode?: string;
+    contextMetadata?: z.infer<typeof contextMetadataSchema>;
+  },
+  traceId: string
+): Promise<OrchestratorReply> {
+  const channel = toPrismaChannel(payload.channel);
+
+  const customer: Customer = await resolveCustomer(
+    channel,
+    payload.channel_user_id,
+    payload.email,
+    payload.phone
+  );
+
+  const thread: Thread = await getOrCreateForegroundThread(customer.id);
+
+  await appendMessage({
+    customerId: customer.id,
+    threadId: thread.id,
+    channel,
+    direction: toMessageDirection('inbound'),
+    text: payload.text,
+    traceId
+  });
+
+  let responseBody: OrchestratorReply;
+
+  if (hasOpenAI()) {
+    const cart = await getOrCreateCart(customer.id);
+    const cartSummary = computeCartSummary(cart);
+
+    const recentMessages = await getRecentMessages(thread.id, 10);
+    const conversationHistory = recentMessages
+      .reverse()
+      .filter((m) => m.text)
+      .map((m) => ({
+        role: (m.direction === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: m.text!
+      }));
+
+    const contextMetadata = payload.contextMetadata ?? undefined;
+    const sessionContext = {
+      sessionId: thread.id,
+      customerId: customer.id,
+      userType: (contextMetadata?.userType ?? 'private_consumer') as 'private_consumer' | 'retailer',
+      currentPage: contextMetadata?.currentPage ?? 'catalog',
+      shareSuggestionsCount: 0,
+      shareSuggestionsPerPage: {} as Record<string, number>,
+      activeGroupOrders: contextMetadata?.activeGroupOrder ? [contextMetadata.activeGroupOrder.code] : [],
+      activeImportOrders: [] as string[],
+    };
+
+    const result = await runChatLoop({
+      userMessage: payload.text,
+      conversationHistory,
+      systemPromptContext: {
+        cart: cartSummary,
+        groupOrderCode: payload.groupOrderCode ?? null,
+        customerPreferences: (customer.preferencesJson as Record<string, unknown>) ?? null,
+        contextMetadata: contextMetadata ?? null,
+        sessionContext,
+      },
+      toolContext: {
+        customerId: customer.id,
+        traceId,
+        sessionContext,
+      }
+    });
+
+    const inferredIntent = inferIntent(payload.text, result);
+
+    await Promise.all([
+      updateThreadContext(thread.id, { last_intent: inferredIntent }),
+      appendMessage({
+        customerId: customer.id,
+        threadId: thread.id,
+        channel,
+        direction: toMessageDirection('outbound'),
+        text: result.reply,
+        traceId,
+        meta: {
+          cards: result.cards?.length ?? 0,
+          hasCart: !!result.cart,
+          hasLink: !!result.link,
+          hasGroupOrder: !!(result.groupOrder ?? result.groupOrders?.length),
+          hasImportOrder: !!(result.importOrder ?? result.importOrders?.length),
+        }
+      })
+    ]);
+
+    if (inferredIntent === 'RECOMMEND' || inferredIntent === 'ADD_TO_CART' || inferredIntent === 'CHECKOUT_INTENT') {
+      syncHubspotForIntent({ customer, intent: inferredIntent as any, thread, traceId })
+        .catch((err) => logError('HubSpot sync failed in pipeline', { traceId, err }));
+    }
+
+    responseBody = {
+      trace_id: traceId,
+      reply: result.reply,
+      intent: inferredIntent,
+      thread_id: thread.id,
+      cards: result.cards,
+      cart: result.cart,
+      suggestions: result.suggestions,
+      link: result.link,
+      groupOrder: result.groupOrder,
+      importOrder: result.importOrder,
+      groupOrders: result.groupOrders,
+      importOrders: result.importOrders,
+      quantityPrompt: result.quantityPrompt,
+    };
+  } else {
+    const intent = classifyIntent(payload.text);
+    let replyText: string;
+    let contextPatch: Record<string, unknown> = {};
+
+    switch (intent) {
+      case 'RECOMMEND': {
+        const result = await runRecommendFlow();
+        replyText = result.reply;
+        contextPatch = result.contextPatch;
+        break;
+      }
+      case 'ADD_TO_CART': {
+        const result = runAddToCartFlow(payload.text, thread);
+        replyText = result.reply;
+        contextPatch = result.contextPatch;
+        break;
+      }
+      case 'CHECKOUT_INTENT': {
+        const result = runCheckoutFlow(thread);
+        replyText = result.reply;
+        contextPatch = result.contextPatch;
+        break;
+      }
+      case 'JOIN_GROUP_ORDER': {
+        const result = runJoinGroupOrderFlow();
+        replyText = result.reply;
+        contextPatch = result.contextPatch;
+        break;
+      }
+      default: {
+        replyText = 'I am not sure how to help with that yet.';
+        contextPatch = { last_intent: intent };
+      }
+    }
+
+    await updateThreadContext(thread.id, { ...contextPatch, last_intent: intent });
+
+    await appendMessage({
+      customerId: customer.id,
+      threadId: thread.id,
+      channel,
+      direction: toMessageDirection('outbound'),
+      text: replyText,
+      traceId
+    });
+
+    if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
+      try {
+        await syncHubspotForIntent({ customer, intent, thread, traceId });
+      } catch (err) {
+        logError('HubSpot sync failed in pipeline', { traceId, err });
+      }
+    }
+
+    responseBody = {
+      trace_id: traceId,
+      reply: replyText,
+      intent,
+      thread_id: thread.id
+    };
+  }
+
+  logInfo('Handled message', {
+    traceId,
+    customerId: customer.id,
+    threadId: thread.id,
+    channel: payload.channel,
+    mode: hasOpenAI() ? 'ai' : 'legacy',
+    intent: responseBody.intent
+  });
+
+  return responseBody;
+}
+
 app.post('/api/message', async (req, res) => {
   const traceId = createTraceId();
   logInfo('Received /api/message', { traceId, body: req.body });
@@ -116,198 +310,39 @@ app.post('/api/message', async (req, res) => {
     });
   }
 
-  const payload = parseResult.data;
-
   try {
-    const channel = toPrismaChannel(payload.channel);
-
-    const customer: Customer = await resolveCustomer(
-      channel,
-      payload.channel_user_id,
-      payload.email,
-      payload.phone
-    );
-
-    const thread: Thread = await getOrCreateForegroundThread(customer.id);
-
-    await appendMessage({
-      customerId: customer.id,
-      threadId: thread.id,
-      channel,
-      direction: toMessageDirection('inbound'),
-      text: payload.text,
-      traceId
-    });
-
-    let responseBody: OrchestratorReply;
-
-    if (hasOpenAI()) {
-      // ── M2: AI-powered chat loop ──
-      const cart = await getOrCreateCart(customer.id);
-      const cartSummary = computeCartSummary(cart);
-
-      // Get recent conversation history for context
-      const recentMessages = await getRecentMessages(thread.id, 10);
-      const conversationHistory = recentMessages
-        .reverse()
-        .filter((m) => m.text)
-        .map((m) => ({
-          role: (m.direction === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
-          content: m.text!
-        }));
-
-      // M2: Build session context for intervention gates and anti-spam
-      const contextMetadata = payload.contextMetadata ?? undefined;
-      const sessionContext = {
-        sessionId: thread.id,
-        customerId: customer.id,
-        userType: (contextMetadata?.userType ?? 'private_consumer') as 'private_consumer' | 'retailer',
-        currentPage: contextMetadata?.currentPage ?? 'catalog',
-        shareSuggestionsCount: 0,
-        shareSuggestionsPerPage: {} as Record<string, number>,
-        activeGroupOrders: contextMetadata?.activeGroupOrder ? [contextMetadata.activeGroupOrder.code] : [],
-        activeImportOrders: [] as string[],
-      };
-
-      const result = await runChatLoop({
-        userMessage: payload.text,
-        conversationHistory,
-        systemPromptContext: {
-          cart: cartSummary,
-          groupOrderCode: payload.groupOrderCode ?? null,
-          customerPreferences: (customer.preferencesJson as Record<string, unknown>) ?? null,
-          contextMetadata: contextMetadata ?? null,
-          sessionContext,
-        },
-        toolContext: {
-          customerId: customer.id,
-          traceId,
-          sessionContext,
-        }
-      });
-
-      // Determine intent from the AI interaction for CRM sync
-      const inferredIntent = inferIntent(payload.text, result);
-
-      // Run DB writes in parallel — they're independent
-      await Promise.all([
-        updateThreadContext(thread.id, { last_intent: inferredIntent }),
-        appendMessage({
-          customerId: customer.id,
-          threadId: thread.id,
-          channel,
-          direction: toMessageDirection('outbound'),
-          text: result.reply,
-          traceId,
-          meta: {
-            cards: result.cards?.length ?? 0,
-            hasCart: !!result.cart,
-            hasLink: !!result.link,
-            hasGroupOrder: !!(result.groupOrder ?? result.groupOrders?.length),
-            hasImportOrder: !!(result.importOrder ?? result.importOrders?.length),
-          }
-        })
-      ]);
-
-      // HubSpot sync for relevant intents (fire-and-forget, don't block response)
-      if (inferredIntent === 'RECOMMEND' || inferredIntent === 'ADD_TO_CART' || inferredIntent === 'CHECKOUT_INTENT') {
-        syncHubspotForIntent({ customer, intent: inferredIntent as any, thread, traceId })
-          .catch((err) => logError('HubSpot sync failed in pipeline', { traceId, err }));
-      }
-
-      responseBody = {
-        trace_id: traceId,
-        reply: result.reply,
-        intent: inferredIntent,
-        thread_id: thread.id,
-        cards: result.cards,
-        cart: result.cart,
-        suggestions: result.suggestions,
-        link: result.link,
-        groupOrder: result.groupOrder,
-        importOrder: result.importOrder,
-        groupOrders: result.groupOrders,
-        importOrders: result.importOrders,
-        quantityPrompt: result.quantityPrompt,
-      };
-    } else {
-      // ── Legacy: rule-based fallback (M1 behavior) ──
-      const intent = classifyIntent(payload.text);
-      let replyText: string;
-      let contextPatch: Record<string, unknown> = {};
-
-      switch (intent) {
-        case 'RECOMMEND': {
-          const result = await runRecommendFlow();
-          replyText = result.reply;
-          contextPatch = result.contextPatch;
-          break;
-        }
-        case 'ADD_TO_CART': {
-          const result = runAddToCartFlow(payload.text, thread);
-          replyText = result.reply;
-          contextPatch = result.contextPatch;
-          break;
-        }
-        case 'CHECKOUT_INTENT': {
-          const result = runCheckoutFlow(thread);
-          replyText = result.reply;
-          contextPatch = result.contextPatch;
-          break;
-        }
-        case 'JOIN_GROUP_ORDER': {
-          const result = runJoinGroupOrderFlow();
-          replyText = result.reply;
-          contextPatch = result.contextPatch;
-          break;
-        }
-        default: {
-          replyText = 'I am not sure how to help with that yet.';
-          contextPatch = { last_intent: intent };
-        }
-      }
-
-      await updateThreadContext(thread.id, { ...contextPatch, last_intent: intent });
-
-      await appendMessage({
-        customerId: customer.id,
-        threadId: thread.id,
-        channel,
-        direction: toMessageDirection('outbound'),
-        text: replyText,
-        traceId
-      });
-
-      if (intent === 'RECOMMEND' || intent === 'ADD_TO_CART') {
-        try {
-          await syncHubspotForIntent({ customer, intent, thread, traceId });
-        } catch (err) {
-          logError('HubSpot sync failed in pipeline', { traceId, err });
-        }
-      }
-
-      responseBody = {
-        trace_id: traceId,
-        reply: replyText,
-        intent,
-        thread_id: thread.id
-      };
-    }
-
-    logInfo('Handled /api/message', {
-      traceId,
-      customerId: customer.id,
-      threadId: thread.id,
-      mode: hasOpenAI() ? 'ai' : 'legacy',
-      intent: responseBody.intent
-    });
-
-    return res.json(responseBody);
+    const result = await processMessage(parseResult.data, traceId);
+    return res.json(result);
   } catch (err) {
     logError('Error handling /api/message', { traceId, err });
     return res.status(500).json({ error: 'Internal server error', trace_id: traceId });
   }
 });
+
+// ── M3: Link code endpoint (web → Telegram/WhatsApp identity bridging) ──
+app.post('/api/link-code', async (req, res) => {
+  const { channel_user_id } = req.body ?? {};
+  if (!channel_user_id || typeof channel_user_id !== 'string') {
+    return res.status(400).json({ error: 'channel_user_id is required' });
+  }
+  try {
+    const customer = await resolveCustomer('web', channel_user_id);
+    const { code, expiresAt } = await createLinkCode(customer.id);
+    const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
+    const botUrl = botUsername ? `https://t.me/${botUsername}?start=${code}` : null;
+    return res.json({ code, bot_url: botUrl, expires_in: 300, expires_at: expiresAt.toISOString() });
+  } catch (err) {
+    logError('Error creating link code', { err });
+    return res.status(500).json({ error: 'Failed to create link code' });
+  }
+});
+
+// ── M3: Telegram webhook ──
+const telegramHandler = createTelegramWebhookHandler(async (payload) => {
+  const traceId = createTraceId();
+  return processMessage(payload, traceId);
+});
+app.post('/webhooks/telegram', telegramHandler);
 
 // Mock payment confirmation endpoint
 app.post('/api/mock-payment/confirm', async (req, res) => {

@@ -1347,3 +1347,100 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── M3: Telegram connect button ── */
+
+.telegram-connect-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(41, 182, 246, 0.1);
+  border: 1px solid rgba(41, 182, 246, 0.35);
+  border-radius: 0.5rem;
+  color: #29b6f6;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.telegram-connect-btn:hover,
+.telegram-connect-btn.active {
+  background: rgba(41, 182, 246, 0.2);
+  border-color: #29b6f6;
+}
+
+.telegram-panel {
+  background: rgba(18, 38, 58, 0.95);
+  border: 1px solid rgba(41, 182, 246, 0.35);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.telegram-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: #9ca3af;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.telegram-panel-close {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 1.1rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+.telegram-panel-close:hover {
+  color: #e5e7eb;
+}
+
+.telegram-panel-code {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #f9fafb;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  padding: 0.4rem 0;
+}
+
+.telegram-panel-instructions {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  margin: 0;
+  text-align: center;
+}
+
+.telegram-open-btn {
+  display: block;
+  text-align: center;
+  background: #29b6f6;
+  color: #031e2e;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.55rem 1rem;
+  border-radius: 0.5rem;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.telegram-open-btn:hover {
+  opacity: 0.88;
+}
+
+.telegram-panel-expiry {
+  font-size: 0.7rem;
+  color: #6b7280;
+  text-align: center;
+}

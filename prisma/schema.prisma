@@ -509,3 +509,15 @@ model CheckoutSession {
   @@index([token])
 }
 
+// M3: Link codes for cross-channel identity bridging (web → Telegram / WhatsApp)
+model LinkCode {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  code       String    @unique @db.VarChar(16)
+  customerId String
+  usedAt     DateTime?
+
+  @@index([code])
+  @@index([customerId])
+}
