@@ -13,18 +13,33 @@ function generateCode(): string {
   return code;
 }
 
+const TTL_MS = 15 * 60 * 1000; // 15 minutes
+
 /**
- * Create a 5-minute link code for the given customer.
- * Any previous unused codes for the same customer are deleted first.
+ * Create a 15-minute link code for the given customer.
+ * Returns the existing valid code if one already exists (prevents self-invalidation
+ * when the button is clicked multiple times). Expired or used codes are cleaned up.
  */
 export async function createLinkCode(
   customerId: string
 ): Promise<{ code: string; expiresAt: Date }> {
+  // Clean up expired or used codes first
   await prisma.linkCode.deleteMany({
-    where: { customerId, usedAt: null },
+    where: {
+      customerId,
+      OR: [{ usedAt: { not: null } }, { expiresAt: { lt: new Date() } }],
+    },
   });
 
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  // Return existing valid code if present (avoid invalidating a code the user just received)
+  const existing = await prisma.linkCode.findFirst({
+    where: { customerId, usedAt: null, expiresAt: { gt: new Date() } },
+  });
+  if (existing) {
+    return { code: existing.code, expiresAt: existing.expiresAt };
+  }
+
+  const expiresAt = new Date(Date.now() + TTL_MS);
 
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = generateCode();

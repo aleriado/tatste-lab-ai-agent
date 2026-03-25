@@ -330,7 +330,7 @@ app.post('/api/link-code', async (req, res) => {
     const { code, expiresAt } = await createLinkCode(customer.id);
     const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
     const botUrl = botUsername ? `https://t.me/${botUsername}?start=${code}` : null;
-    return res.json({ code, bot_url: botUrl, expires_in: 300, expires_at: expiresAt.toISOString() });
+    return res.json({ code, bot_url: botUrl, expires_in: 900, expires_at: expiresAt.toISOString() });
   } catch (err) {
     logError('Error creating link code', { err });
     return res.status(500).json({ error: 'Failed to create link code' });
