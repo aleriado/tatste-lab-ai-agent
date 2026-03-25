@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { consumeLinkCode } from '@taste-labs/db';
-import { sendTelegramMessage, sendTelegramMediaGroup } from './sender';
+import { sendTelegramMessage, sendTelegramCard, answerCallbackQuery } from './sender';
 import { logInfo, logError } from '../../logger';
 
 interface TelegramUpdate {
@@ -11,10 +11,19 @@ interface TelegramUpdate {
     chat: { id: number; type: string };
     text?: string;
   };
+  callback_query?: {
+    id: string;
+    from: { id: number; first_name?: string; username?: string };
+    message?: { chat: { id: number; type: string } };
+    data?: string;
+  };
 }
 
 interface CardLike {
+  id?: string;
   name?: string;
+  price?: string;
+  shortDescription?: string;
   imageUrl?: string;
 }
 
@@ -41,6 +50,32 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
     res.sendStatus(200);
 
     const update: TelegramUpdate = req.body;
+
+    // ── Callback query (inline button tapped) ──────────────────────────────
+    const cq = update.callback_query;
+    if (cq?.data) {
+      const chatId = String(cq.message?.chat?.id ?? cq.from.id);
+      const [action, productId] = cq.data.split(':');
+      try {
+        await answerCallbackQuery(cq.id);
+
+        let actionText: string;
+        if (action === 'buy') {
+          actionText = `Purchase [productId:${productId}]`;
+        } else {
+          actionText = `Show full details for [productId:${productId}]`;
+        }
+
+        const result = await processMessage({ channel: 'telegram', channel_user_id: chatId, text: actionText });
+        await sendTelegramMessage(chatId, result.reply);
+        await sendCards(chatId, result.cards);
+      } catch (err) {
+        logError('Telegram callback_query error', { chatId, err });
+      }
+      return;
+    }
+
+    // ── Regular message ────────────────────────────────────────────────────
     const msg = update.message;
     if (!msg?.text || !msg.chat?.id) return;
 
@@ -68,7 +103,7 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
         } else {
           await sendTelegramMessage(
             chatId,
-            "Hello! I'm the Taste Labs AI assistant.\n\nTo link your web session, click \"Connect Telegram\" on the website and tap the link you receive."
+            "Hello! I'm the Taste Labs assistant.\n\nSend me a message to get started."
           );
         }
         return;
@@ -76,13 +111,7 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
 
       const result = await processMessage({ channel: 'telegram', channel_user_id: chatId, text });
       await sendTelegramMessage(chatId, result.reply);
-
-      const imageItems = (result.cards ?? [])
-        .filter((c): c is CardLike & { imageUrl: string } => !!c.imageUrl)
-        .map((c) => ({ imageUrl: c.imageUrl, caption: c.name }));
-      if (imageItems.length > 0) {
-        await sendTelegramMediaGroup(chatId, imageItems);
-      }
+      await sendCards(chatId, result.cards);
     } catch (err) {
       logError('Telegram webhook error', { chatId, err });
       try {
@@ -90,4 +119,22 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
       } catch { /* ignore */ }
     }
   };
+}
+
+async function sendCards(chatId: string, cards?: CardLike[]): Promise<void> {
+  if (!cards?.length) return;
+  for (const card of cards) {
+    if (!card.id || !card.name) continue;
+    try {
+      await sendTelegramCard(chatId, {
+        id: card.id,
+        name: card.name,
+        price: card.price,
+        shortDescription: card.shortDescription,
+        imageUrl: card.imageUrl,
+      });
+    } catch (err) {
+      logError('Failed to send Telegram card', { chatId, cardId: card.id, err });
+    }
+  }
 }

@@ -28,30 +28,75 @@ export async function sendTelegramMessage(
   await telegramPost('sendMessage', { chat_id: chatId, text });
 }
 
-/**
- * Send a single photo with an optional caption.
- */
-export async function sendTelegramPhoto(
-  chatId: string | number,
-  imageUrl: string,
-  caption?: string
-): Promise<void> {
-  await telegramPost('sendPhoto', { chat_id: chatId, photo: imageUrl, caption });
+export interface TelegramCardData {
+  id: string;
+  name: string;
+  price?: string;
+  shortDescription?: string;
+  imageUrl?: string;
 }
 
 /**
- * Send up to 10 images as a media group (album).
- * Each item can have an optional caption shown under its photo.
+ * Send a product card as a photo (or text if no image) with Purchase / Details
+ * inline keyboard buttons. Purchase triggers a callback that adds to cart;
+ * Details triggers a callback that fetches full product info.
  */
-export async function sendTelegramMediaGroup(
+export async function sendTelegramCard(
   chatId: string | number,
-  items: { imageUrl: string; caption?: string }[]
+  card: TelegramCardData
 ): Promise<void> {
-  const media = items.slice(0, 10).map((item, i) => ({
-    type: 'photo',
-    media: item.imageUrl,
-    // Telegram only shows caption on the first item of a group
-    ...(i === 0 && item.caption ? { caption: item.caption } : {}),
-  }));
-  await telegramPost('sendMediaGroup', { chat_id: chatId, media });
+  // Build caption: name in bold, price, short description (strip HTML tags)
+  const plainDesc = (card.shortDescription ?? '')
+    .replace(/<[^>]*>/g, '')
+    .trim()
+    .slice(0, 200);
+
+  const captionParts = [
+    `<b>${escapeHtml(card.name)}</b>`,
+    card.price ? `₪${escapeHtml(card.price)}` : null,
+    plainDesc || null,
+  ].filter(Boolean);
+  const caption = captionParts.join('\n');
+
+  const replyMarkup = {
+    inline_keyboard: [[
+      { text: '🛒 Purchase', callback_data: `buy:${card.id}` },
+      { text: 'ℹ️ Details',  callback_data: `dtl:${card.id}` },
+    ]],
+  };
+
+  if (card.imageUrl) {
+    await telegramPost('sendPhoto', {
+      chat_id: chatId,
+      photo: card.imageUrl,
+      caption,
+      parse_mode: 'HTML',
+      reply_markup: replyMarkup,
+    });
+  } else {
+    await telegramPost('sendMessage', {
+      chat_id: chatId,
+      text: caption,
+      parse_mode: 'HTML',
+      reply_markup: replyMarkup,
+    });
+  }
+}
+
+/**
+ * Answer a callback query to dismiss Telegram's loading spinner.
+ * Must be called within 10 seconds of receiving the callback.
+ */
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string
+): Promise<void> {
+  await telegramPost('answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text } : {}),
+  });
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
