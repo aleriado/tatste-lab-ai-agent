@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { consumeLinkCode } from '@taste-labs/db';
+import { consumeLinkCode, findCustomerByChannel, getLastAssistantMessage } from '@taste-labs/db';
 import { sendTelegramMessage, sendTelegramCard, answerCallbackQuery } from './sender';
 import { logInfo, logError } from '../../logger';
 
@@ -94,6 +94,11 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
               chatId,
               'Connected! Your web session is now linked to Telegram. You can continue your conversation here.'
             );
+            // Send the last assistant message so the user can pick up where they left off
+            const lastMsg = await getLastAssistantMessage(linked.customerId);
+            if (lastMsg) {
+              await sendTelegramMessage(chatId, lastMsg);
+            }
           } else {
             await sendTelegramMessage(
               chatId,
@@ -101,10 +106,23 @@ export function createTelegramWebhookHandler(processMessage: ProcessMessageFn) {
             );
           }
         } else {
-          await sendTelegramMessage(
-            chatId,
-            "Hello! I'm the Taste Labs assistant.\n\nSend me a message to get started."
-          );
+          // Bare /start (no code) — check if already linked so we don't disrupt the session
+          const existing = await findCustomerByChannel('telegram', chatId);
+          if (existing) {
+            await sendTelegramMessage(
+              chatId,
+              "Welcome back! You're already connected. Just send me a message to continue."
+            );
+            const lastMsg = await getLastAssistantMessage(existing.id);
+            if (lastMsg) {
+              await sendTelegramMessage(chatId, lastMsg);
+            }
+          } else {
+            await sendTelegramMessage(
+              chatId,
+              "Hello! I'm the Taste Labs assistant.\n\nTo connect your web session, use the link from the website. Or just send me a message to get started."
+            );
+          }
         }
         return;
       }

@@ -149,6 +149,40 @@ export async function getRecentMessages(threadId: string, limit: number = 20) {
   });
 }
 
+/**
+ * Look up an existing customer by channel identity without creating one.
+ */
+export async function findCustomerByChannel(
+  channel: Channel,
+  channelUserId: string
+): Promise<Customer | null> {
+  const identity = await prisma.channelIdentity.findUnique({
+    where: { channel_channelUserId: { channel, channelUserId } },
+    include: { customer: true }
+  });
+  return identity?.customer ?? null;
+}
+
+/**
+ * Get the last outbound (assistant) message for a customer's foreground thread.
+ */
+export async function getLastAssistantMessage(
+  customerId: string
+): Promise<string | null> {
+  const customer = await prisma.customer.findUnique({
+    where: { id: customerId },
+    select: { foregroundThreadId: true }
+  });
+  if (!customer?.foregroundThreadId) return null;
+
+  const msg = await prisma.message.findFirst({
+    where: { threadId: customer.foregroundThreadId, direction: 'outbound' },
+    orderBy: { createdAt: 'desc' },
+    select: { text: true }
+  });
+  return msg?.text ?? null;
+}
+
 // ─── CRM Link ───
 
 export async function upsertCrmLink(params: {
