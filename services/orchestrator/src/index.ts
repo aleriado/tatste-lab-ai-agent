@@ -16,6 +16,7 @@ import {
 } from '@taste-labs/db';
 import { createLinkCode } from '@taste-labs/db';
 import { createTelegramWebhookHandler } from './channels/telegram/webhook';
+import { createWhatsAppWebhookHandler, createWhatsAppVerifyHandler } from './channels/whatsapp/webhook';
 import type { OrchestratorReply } from '@taste-labs/shared';
 import { runChatLoop } from './ai/chatLoop';
 import { syncHubspotForIntent } from './adapters/hubspot';
@@ -30,7 +31,9 @@ import { runCheckoutFlow } from './flows/checkout';
 import { runJoinGroupOrderFlow } from './flows/joinGroupOrder';
 
 const app = express();
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, _res, buf) => { req.rawBody = buf; },
+}));
 
 // CORS for local dev
 const ALLOWED_ORIGINS = new Set([
@@ -330,7 +333,9 @@ app.post('/api/link-code', async (req, res) => {
     const { code, expiresAt } = await createLinkCode(customer.id);
     const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
     const botUrl = botUsername ? `https://t.me/${botUsername}?start=${code}` : null;
-    return res.json({ code, bot_url: botUrl, expires_in: 900, expires_at: expiresAt.toISOString() });
+    const waPhoneNumber = process.env.WHATSAPP_PHONE_NUMBER ?? '';
+    const waUrl = waPhoneNumber ? `https://wa.me/${waPhoneNumber}?text=${encodeURIComponent(code)}` : null;
+    return res.json({ code, bot_url: botUrl, wa_url: waUrl, expires_in: 900, expires_at: expiresAt.toISOString() });
   } catch (err) {
     logError('Error creating link code', { err });
     return res.status(500).json({ error: 'Failed to create link code' });
@@ -343,6 +348,14 @@ const telegramHandler = createTelegramWebhookHandler(async (payload) => {
   return processMessage(payload, traceId);
 });
 app.post('/webhooks/telegram', telegramHandler);
+
+// ── M3: WhatsApp webhook ──
+const whatsappHandler = createWhatsAppWebhookHandler(async (payload) => {
+  const traceId = createTraceId();
+  return processMessage(payload, traceId);
+});
+app.get('/webhooks/whatsapp', createWhatsAppVerifyHandler());
+app.post('/webhooks/whatsapp', whatsappHandler);
 
 // Mock payment confirmation endpoint
 app.post('/api/mock-payment/confirm', async (req, res) => {

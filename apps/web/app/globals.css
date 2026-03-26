@@ -1444,3 +1444,100 @@ body {
   color: #6b7280;
   text-align: center;
 }
+
+/* ── M3: WhatsApp connect button ── */
+
+.whatsapp-connect-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(37, 211, 102, 0.1);
+  border: 1px solid rgba(37, 211, 102, 0.35);
+  border-radius: 0.5rem;
+  color: #25d366;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.whatsapp-connect-btn:hover,
+.whatsapp-connect-btn.active {
+  background: rgba(37, 211, 102, 0.2);
+  border-color: #25d366;
+}
+
+.whatsapp-panel {
+  background: rgba(18, 38, 28, 0.95);
+  border: 1px solid rgba(37, 211, 102, 0.35);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.whatsapp-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: #9ca3af;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.whatsapp-panel-close {
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 1.1rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+}
+.whatsapp-panel-close:hover {
+  color: #e5e7eb;
+}
+
+.whatsapp-panel-code {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #f9fafb;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  padding: 0.4rem 0;
+}
+
+.whatsapp-panel-instructions {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  margin: 0;
+  text-align: center;
+}
+
+.whatsapp-open-btn {
+  display: block;
+  text-align: center;
+  background: #25d366;
+  color: #031e0e;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.55rem 1rem;
+  border-radius: 0.5rem;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.whatsapp-open-btn:hover {
+  opacity: 0.88;
+}
+
+.whatsapp-panel-expiry {
+  font-size: 0.7rem;
+  color: #6b7280;
+  text-align: center;
+}
