@@ -38,8 +38,16 @@ This repository is intended to be the central brain that:
     - ✅ HubSpot REST adapter with contact/deal sync
     - ✅ WooCommerce REST adapter for catalog search
     - ✅ Full flow: recommend → add-to-cart → HubSpot write
-- **M2 — Group Order Lifecycle + Payments**: 📌 **Planned**
-- **M3 — Multi-channel Integration**: 📌 **Planned**
+- **M2 — Group Order Lifecycle + Payments**: ✅ **Complete**
+  - Group order flow: invitations, join via link, participant items, host checkout
+  - Tools: `group_update_item`, `import_checkout`, `import_update_item` per spec §4.7 / §5.7 / §5.8
+  - Stock order MOQ visual quantity picker
+  - HubSpot product catalog sync
+- **M3 — Multi-channel Integration**: ✅ **Complete**
+  - Telegram bot integration with product cards, media-group images, and inline Purchase/Details buttons
+  - WhatsApp Business API integration (Cloud API webhooks + outbound)
+  - Cross-channel session continuity via short-TTL link codes (self-invalidating)
+  - Channel-agnostic orchestration: same Normalize → Identity → Intent → Flow pipeline for web, Telegram, and WhatsApp
 
 > Keep this section up to date as milestones evolve.
 
@@ -150,6 +158,26 @@ Integration behavior is controlled by env flags. Flows use a **stable adapter in
 - **HubSpot:** MCP is test mode; `stub` logs actions and stores fake IDs in `CrmLink` so the demo never breaks.
 
 Full details: [docs/integrations.md](docs/integrations.md).
+
+---
+
+## 5.2 Channels (M3)
+
+The orchestrator exposes channel adapters alongside the web chat UI. Each channel normalizes inbound events into the same internal shape and calls the shared flow engine.
+
+| Env var | Description |
+|--------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather. |
+| `TELEGRAM_BOT_USERNAME` | Bot username (without `@`) — used to build `t.me/<bot>?start=<code>` links. |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API phone number ID. |
+| `WHATSAPP_ACCESS_TOKEN` | Graph API access token for the WhatsApp app. |
+| `WHATSAPP_VERIFY_TOKEN` | Webhook verification token (shared with Meta app config). |
+| `WHATSAPP_PHONE_NUMBER` | Public WhatsApp number in international format — used to build `api.whatsapp.com/send?phone=...&text=<code>` deep links. |
+
+**Link-code flow (cross-channel continuity):**
+- Web UI calls `POST /api/link-code` to mint a short-TTL code (15 min) with `bot_url` and `wa_url`.
+- The user opens the Telegram/WhatsApp deep link; the channel adapter consumes the code, binds the channel user to the existing `Customer`, and continues the conversation with the session context preserved.
+- Codes self-invalidate on use.
 
 ---
 
@@ -274,19 +302,16 @@ Example structure (fill in details):
 
 ---
 
-- **M2 — Group order lifecycle + payments**
-  - Model full group order lifecycle:
-    - Invitations, partial orders, cut-off times, modifications.
-  - Integrate payment adapter:
-    - Pre-auth, capture, refunds.
-  - Add observability for drop-off points in the flow.
+## 9. Roadmap beyond M3
 
-- **M3 — Multi-channel integration**
-  - Expand beyond the initial channel (e.g. web chat) to:
-    - SMS / WhatsApp
-    - Email
-    - Other partner channels (as needed)
-  - Ensure the orchestration pipeline stays **channel-agnostic** via the Normalize → Identity → Intent → Flow model.
+- **M4 — Observability & production hardening**
+  - Structured traceId-tagged logs across all channels
+  - Drop-off metrics for group order and checkout flows
+  - Health / readiness endpoints and PM2 supervision (see `ecosystem.config.cjs`)
+- **Payments**
+  - Finalize payment adapter (pre-auth, capture, refunds) and wire into checkout
+- **Additional channels**
+  - SMS, email, and partner-specific channels via the same adapter interface
 
 ---
 

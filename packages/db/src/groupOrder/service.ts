@@ -7,6 +7,7 @@
 
 import { allocateToGroupOrder } from './allocation';
 import { loadGroupOrderState, saveAllocationResult, recalcMoq, ensureParticipant } from './repository';
+import { getGroupOrderMoqBoxes } from './config';
 import type { AllocationInput, AllocationResult, ProductLogistics } from './types';
 
 export interface AddItemToGroupOrderInput {
@@ -60,11 +61,16 @@ export async function addItemToGroupOrder(
     // Load current group order state
     const groupOrder = await loadGroupOrderState(code);
 
+    // For group orders (not import): ensure product has moqBoxes for validation and layer-sharing cap
+    const effectiveProduct: ProductLogistics = groupOrder.isImport
+      ? product
+      : { ...product, moqBoxes: product.moqBoxes ?? getGroupOrderMoqBoxes() };
+
     // Prepare allocation input
     const allocationInput: AllocationInput = {
       groupOrderId: groupOrder.id,
       customerId,
-      product,
+      product: effectiveProduct,
       quantityUnits
     };
 

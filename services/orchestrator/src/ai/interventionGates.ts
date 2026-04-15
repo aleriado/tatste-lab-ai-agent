@@ -414,6 +414,10 @@ export async function evaluateOrderTypeOptions(
       daysLeft: undefined as number | undefined,
     }));
 
+    const groupMoqBoxes = getGroupOrderMoqBoxes();
+    const boxesPerLayer = typeof product.boxesPerLayer === 'number' && product.boxesPerLayer > 0 ? product.boxesPerLayer : 1;
+    const maxUsersPerLayer = groupMoqBoxes > 0 ? Math.floor(boxesPerLayer / groupMoqBoxes) : 0;
+
     types.push({
       type: 'group',
       available: true,
@@ -423,6 +427,8 @@ export async function evaluateOrderTypeOptions(
         ? `${ais02Result.activeOrders.length} active group order(s) available for ${product.manufacturer}.`
         : 'Share a palette with other buyers for import pricing.',
       existingOrders: existingGroupOrders.length > 0 ? existingGroupOrders : undefined,
+      moqBoxes: groupMoqBoxes,
+      maxUsersPerLayer: maxUsersPerLayer > 0 ? maxUsersPerLayer : undefined,
     });
   }
 
@@ -461,6 +467,12 @@ export async function evaluateOrderTypeOptions(
       ? (product as any).metadata.unitsPerBox
       : undefined);
 
+  const boxesPerLayer = typeof product.boxesPerLayer === 'number' && product.boxesPerLayer > 0
+    ? product.boxesPerLayer
+    : (typeof (product as any).metadata?.boxesPerLayer === 'number' && (product as any).metadata.boxesPerLayer > 0
+      ? (product as any).metadata.boxesPerLayer
+      : undefined);
+
   return {
     productId: product.id,
     productName: product.name,
@@ -468,6 +480,7 @@ export async function evaluateOrderTypeOptions(
     manufacturer: product.manufacturer,
     types,
     unitsPerBox,
+    boxesPerLayer,
   };
 }
 
@@ -837,6 +850,13 @@ function getStockOrderMoqBoxes(): number {
   const raw = process.env.STOCK_ORDER_DEFAULT_MOQ_BOXES ?? process.env.STOCK_ORDER_DEFAULT_MOQ_UNITS ?? '3';
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : 3;
+}
+
+/** Group order MOQ in boxes (minimum boxes a single user must commit to). Set via GROUP_ORDER_DEFAULT_MOQ_BOXES (default 1). */
+function getGroupOrderMoqBoxes(): number {
+  const raw = process.env.GROUP_ORDER_DEFAULT_MOQ_BOXES ?? '1';
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
 /**

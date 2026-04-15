@@ -5,12 +5,13 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'product_search',
-      description: 'Search the Taste Labs product catalog. First matches by product name (and ranks by color/origin/taste in description if given). If no exact match, may return related products with matchType "related" and a "reason". Use when user asks for recommendations, a product type, or to browse. When the user asks for "products under X ILS" or "below X" or "cheaper than X", pass maxPrice: X so only products at or below that price are returned.',
+      description: 'Search the Taste Labs product catalog. First matches by product name (and ranks by color/origin/taste in description if given). If no exact match, may return related products with matchType "related" and a "reason". Use when user asks for recommendations, a product type, or to browse. When the user is starting an import or group order from a specific manufacturer and asks to see products or "show me", pass manufacturer with that manufacturer name so only products from that manufacturer are returned. When the user asks for "products under X ILS" or "below X" or "cheaper than X", pass maxPrice: X so only products at or below that price are returned.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search query (e.g. "שמן", "pasta", "oil"). Use empty string "" to list all products.' },
+          query: { type: 'string', description: 'Search query (e.g. "שמן", "pasta", "oil"). Use empty string "" to list all products or when filtering only by manufacturer.' },
           limit: { type: 'number', description: 'Max results to return. Use 100-200 for recommendations/browse. Default 200.' },
+          manufacturer: { type: 'string', description: 'Optional. Only return products from this manufacturer (e.g. "Campo D\'oro Srl"). Use when user asks for products for an import/group order from a specific manufacturer or "show me" in that context.' },
           maxPrice: { type: 'number', description: 'Optional. Only return products with price (ILS) at or below this value. Use when user says "under X ILS", "below X", "cheaper than X".' },
           minPrice: { type: 'number', description: 'Optional. Only return products with price (ILS) at or above this value.' }
         },
@@ -195,7 +196,7 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'group_status',
-      description: 'Check the status of a group order (participants, MOQ progress, deadline).',
+      description: 'Check the status of a group order (participants, MOQ progress, surfaces/layers). Call this when the user asks for group order status so the UI can show the status block with layer table.',
       parameters: {
         type: 'object',
         properties: {
@@ -238,13 +239,13 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'group_add_item',
-      description: 'Add a product to a group order. CRITICAL: Use the correct product ID. When the user names a product (e.g. "מעדן פירות יער עשיר 110%"), call product_search with that exact name first and use the returned product ID — do NOT use a different product ID (e.g. berry vs apricot have different IDs). If they just added a product and say "add more" or "add X units of that product", use the same productId from the previous group_add_item. Quantity is in UNITS, not boxes. If the user says "X boxes", convert: quantity = X × unitsPerBox (get unitsPerBox from get_order_type_options response). All products in a group order must be from the same manufacturer.',
+      description: 'Add a product to a group order (group order = multiple users fill a shared surface; user commits in boxes with min MOQ). Use correct product ID: from product_search when user names a product, or same productId from previous group_add_item when they say "add more". All products must be from the same manufacturer. User commits in BOXES: convert to units with quantity = X × unitsPerBox from get_order_type_options. Ensure user\'s box count is at or above product MOQ before calling; if below MOQ, tell the user and offer minimum — do not call. Max users per layer = floor(boxes per layer ÷ MOQ). Confirm with user before calling.',
       parameters: {
         type: 'object',
         properties: {
           code: { type: 'string', description: 'The group order code' },
-          productId: { type: 'string', description: 'Product ID from product_search for the named product. Must match the product the user asked for (e.g. מעדן פירות יער ≠ מעדן משמשים).' },
-          quantity: { type: 'number', description: 'Quantity in UNITS (individual items), not boxes. Default is 1 unit. System rounds up to full boxes automatically.' },
+          productId: { type: 'string', description: 'Product ID from product_search or from last get_order_type_options. Must match the product the user asked for.' },
+          quantity: { type: 'number', description: 'Quantity in UNITS. If user says "X boxes", set quantity = X × unitsPerBox (from get_order_type_options). Must be at least MOQ in units (MOQ boxes × unitsPerBox).' },
           variantId: { type: 'string', description: 'Variant ID if applicable' }
         },
         required: ['code', 'productId']
@@ -328,13 +329,13 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'import_add_item',
-      description: 'Add a product to an import order. Quantity is in UNITS (individual items), NOT boxes. If the user says "X boxes", convert: quantity = X × unitsPerBox (get unitsPerBox from get_order_type_options response). The system uses the existing allocation engine to allocate units to surfaces and layers. Only the import order creator can add items. Returns palette fill progress after addition.',
+      description: 'Add a product to a drop-import order (single user fills entire surface; whole layers only, no partial layers). Only the creator can add items. User commits in LAYERS: quantity must be a whole number of layers. Convert "X layers" to units: quantity = X × (boxesPerLayer × unitsPerBox) from get_order_type_options. Do NOT pass a quantity that is not a multiple of (boxesPerLayer × unitsPerBox) or the tool returns PARTIAL_LAYER error. Returns allocation result and surface fill progress.',
       parameters: {
         type: 'object',
         properties: {
           code: { type: 'string', description: 'The import order code' },
           productId: { type: 'string', description: 'Product ID to add' },
-          quantity: { type: 'number', description: 'Quantity in UNITS (individual items). System rounds up to full boxes automatically.' }
+          quantity: { type: 'number', description: 'Quantity in UNITS. Must equal a whole number of layers: quantity = layers × boxesPerLayer × unitsPerBox. If user says "X layers", compute this and pass it. Partial layers are rejected (PARTIAL_LAYER error).' }
         },
         required: ['code', 'productId', 'quantity']
       }
@@ -357,7 +358,7 @@ export const conciergeTools: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'import_order_status',
-      description: 'Get the status of an import order by code. When the user asks for "my import order status" without giving a code, call import_order_list first to get their order code(s), then call this with that code. Include the code in your reply (e.g. "Import order FKFQAG: …").',
+      description: 'Get the status of an import order by code. Call this when the user asks for import order status so the UI can show the status block. When they do not give a code, call import_order_list first, then call this with that code. Include the code in your reply (e.g. "Import order FKFQAG: …").',
       parameters: {
         type: 'object',
         properties: {
@@ -409,5 +410,51 @@ export const conciergeTools: ChatCompletionTool[] = [
         }
       }
     }
-  }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'group_update_item',
+      description: 'Change the quantity (in boxes) of a product a returning participant has reserved in a group order. Use when user wants to increase or decrease their current reservation. newQuantityBoxes is the desired FINAL box count (not a delta). If 0, cancels the reservation for that product. Validates MOQ: if newQuantityBoxes > 0 but below product MOQ, returns an error with the spec message instead of proceeding. Always confirm with user before calling.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The group order code' },
+          productId: { type: 'string', description: 'Product ID to update' },
+          newQuantityBoxes: { type: 'number', description: 'Desired final box count for this product (0 = cancel reservation)' }
+        },
+        required: ['code', 'productId', 'newQuantityBoxes']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'import_checkout',
+      description: 'Initiate checkout for a complete import order (surface fully filled). Validates the surface is complete, transitions status to CHECKOUT_STARTED, and creates a payment session. Only the import order creator can check out. Call when user confirms they are ready to submit the complete import order.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The import order code to check out' }
+        },
+        required: ['code']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'import_update_item',
+      description: 'Change the number of layers for a product already allocated in a drop-import order (spec §5.7 mid-order changes). newLayerCount is the desired FINAL layer count (not a delta). If 0, removes the product entirely. Partial layers are not permitted — newLayerCount must be a whole number. Only the import order creator can update. Always confirm with user before calling: "Reducing [Product] from [N] to [M] layers frees up [N-M] layers. Confirm?"',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The import order code' },
+          productId: { type: 'string', description: 'Product ID to update' },
+          newLayerCount: { type: 'number', description: 'Desired final layer count (0 = remove product entirely). Must be a whole number.' }
+        },
+        required: ['code', 'productId', 'newLayerCount']
+      }
+    }
+  },
 ];

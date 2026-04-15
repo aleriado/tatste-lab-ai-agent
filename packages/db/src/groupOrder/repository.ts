@@ -8,6 +8,12 @@
 import { PrismaClient } from '@prisma/client';
 import type { GroupOrderState, AllocationResult, LayerContribution } from './types';
 import { getGroupOrderConfig } from './config';
+
+function layerParticipantInfo(contributions: unknown): { participantCount: number; participantCustomerIds: string[] } {
+  const list = (Array.isArray(contributions) ? contributions : []) as Array<{ customerId?: string }>;
+  const ids = [...new Set(list.map((c) => c.customerId).filter(Boolean) as string[])];
+  return { participantCount: ids.length, participantCustomerIds: ids };
+}
 import type { GroupOrderStatus } from '@prisma/client';
 
 // Use a module-level singleton to avoid circular dep with index.ts
@@ -56,17 +62,22 @@ export async function loadGroupOrderState(codeOrId: string): Promise<GroupOrderS
       surfaceIndex: surface.surfaceIndex,
       maxLayers: surface.maxLayers,
       status: surface.status,
-      layers: surface.layers.map(layer => ({
-        id: layer.id,
-        layerIndex: layer.layerIndex,
-        productId: layer.productId,
-        variantId: layer.variantId,
-        capacityBoxes: layer.capacityBoxes,
-        capacityUnits: layer.capacityUnits,
-        filledBoxes: layer.filledBoxes,
-        filledUnits: layer.filledUnits,
-        status: layer.status
-      }))
+      layers: surface.layers.map(layer => {
+        const { participantCount, participantCustomerIds } = layerParticipantInfo(layer.contributions);
+        return {
+          id: layer.id,
+          layerIndex: layer.layerIndex,
+          productId: layer.productId,
+          variantId: layer.variantId,
+          capacityBoxes: layer.capacityBoxes,
+          capacityUnits: layer.capacityUnits,
+          filledBoxes: layer.filledBoxes,
+          filledUnits: layer.filledUnits,
+          status: layer.status,
+          participantCount,
+          participantCustomerIds,
+        };
+      })
     })),
     allowExtraSurfaces: config.allowExtraSurfaces,
     maxSurfacesLimit: config.maxSurfaces
@@ -118,17 +129,22 @@ export async function loadImportOrdersByCustomer(
       surfaceIndex: surface.surfaceIndex,
       maxLayers: surface.maxLayers,
       status: surface.status,
-      layers: surface.layers.map((layer) => ({
-        id: layer.id,
-        layerIndex: layer.layerIndex,
-        productId: layer.productId,
-        variantId: layer.variantId,
-        capacityBoxes: layer.capacityBoxes,
-        capacityUnits: layer.capacityUnits,
-        filledBoxes: layer.filledBoxes,
-        filledUnits: layer.filledUnits,
-        status: layer.status,
-      })),
+      layers: surface.layers.map((layer) => {
+        const { participantCount, participantCustomerIds } = layerParticipantInfo(layer.contributions);
+        return {
+          id: layer.id,
+          layerIndex: layer.layerIndex,
+          productId: layer.productId,
+          variantId: layer.variantId,
+          capacityBoxes: layer.capacityBoxes,
+          capacityUnits: layer.capacityUnits,
+          filledBoxes: layer.filledBoxes,
+          filledUnits: layer.filledUnits,
+          status: layer.status,
+          participantCount,
+          participantCustomerIds,
+        };
+      }),
     })),
     allowExtraSurfaces: config.allowExtraSurfaces,
     maxSurfacesLimit: config.maxSurfaces,

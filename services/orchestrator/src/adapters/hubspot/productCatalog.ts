@@ -329,6 +329,8 @@ const PRODUCT_PROPERTIES = [
   'n3_mhyr_sytwny_wholesale_pricing__per_carton',
   'n4_mhyr_ybwn_lmsth_ml_full_pallet_import_pricing',
   'yzrn__spq_producer__supplier',
+  'manufacturer_name',
+  'manufacturer',
   'mwtg_brand',
   'rz_mqwr_country_of_origin',
   'mspr_yhydwt_bqrtwn',
@@ -617,10 +619,65 @@ export type HubSpotSearchResult = {
   reason?: string;
 };
 
-export async function searchHubSpotProducts(query: string, limit: number): Promise<HubSpotSearchResult> {
+/** Normalize manufacturer for comparison: trim, lowercase (ASCII), collapse spaces. */
+function normalizeManufacturerForMatch(s: string | undefined | null): string {
+  if (s == null) return '';
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/['']/g, "'");
+}
+
+/** Known manufacturer aliases: Latin/English name -> possible values in HubSpot (e.g. Hebrew). */
+const MANUFACTURER_ALIASES: Record<string, string[]> = {
+  "campo d'oro srl": ['קאמפו דאורו אס.אר.אל', "campo d'oro", "campo d'oro srl", 'campo doro'],
+  "campo d'oro": ['קאמפו דאורו אס.אר.אל', "campo d'oro srl", 'campo doro'],
+};
+
+/** Extract significant tokens (length >= 2, skip common legal suffixes). */
+function manufacturerTokens(s: string): string[] {
+  const normalized = normalizeManufacturerForMatch(s);
+  const skip = new Set(['srl', 'ltd', 'inc', 'llc', 'co', 'corp', 'plc', 'גmbh']);
+  return normalized
+    .split(/[\s.,\-_]+/)
+    .map((t) => t.replace(/['']/g, "'").trim())
+    .filter((t) => t.length >= 2 && !skip.has(t));
+}
+
+/** True if product's manufacturer matches the requested manufacturer (flexible contains, token overlap, or known alias). */
+function manufacturerMatches(productManufacturer: string | undefined | null, requestedManufacturer: string): boolean {
+  const a = normalizeManufacturerForMatch(productManufacturer);
+  const b = normalizeManufacturerForMatch(requestedManufacturer);
+  if (!a || !b) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  // Alias: e.g. request "Campo D'oro Srl" matches product "קאמפו דאורו אס.אר.אל"
+  const aliases = MANUFACTURER_ALIASES[b];
+  if (aliases?.some((al) => normalizeManufacturerForMatch(al) === a || a.includes(normalizeManufacturerForMatch(al)))) return true;
+  // Token overlap: at least 2 request tokens appear in product (or 1 token of length >= 4)
+  const reqTokens = manufacturerTokens(requestedManufacturer);
+  const productNorm = a;
+  const matchCount = reqTokens.filter((t) => productNorm.includes(t) || productNorm.includes(t.replace(/'/g, ''))).length;
+  if (matchCount >= 2) return true;
+  if (matchCount >= 1 && reqTokens.some((t) => t.length >= 4)) return true;
+  return false;
+}
+
+export type SearchHubSpotProductsOptions = {
+  /** Only return products from this manufacturer (post-filter on mapped manufacturer). */
+  manufacturer?: string;
+};
+
+export async function searchHubSpotProducts(
+  query: string,
+  limit: number,
+  options?: SearchHubSpotProductsOptions
+): Promise<HubSpotSearchResult> {
   const token = getProductToken();
   const emptyExact: HubSpotSearchResult = { products: [], matchType: 'exact' };
   if (!token) return emptyExact;
+
+  const manufacturerFilter = options?.manufacturer?.trim();
 
   try {
     const descriptionProps = await getDescriptionPropertyNames();
@@ -634,10 +691,36 @@ export async function searchHubSpotProducts(query: string, limit: number): Promi
       1,
       Math.min(normalizedLimit, Number.isFinite(maxFetch) && maxFetch > 0 ? Math.floor(maxFetch) : 500)
     );
+    // When filtering by manufacturer, fetch more so we have enough after filtering
+    const fetchLimit = manufacturerFilter ? Math.min(maxFetch || 500, Math.max(desired, 300)) : desired;
 
     // Step 1: Translate user query (English) to Hebrew, then search HubSpot (properties are in Hebrew).
-    const hubspotQuery = toHebrewSearchQuery(trimmed) || trimmed;
-    let filtered = await fetchHubSpotProductsByQuery(hubspotQuery, desired, descriptionProps, propsStr);
+    // When filtering by manufacturer and no query, search by manufacturer name so we get candidates to post-filter.
+    const searchQuery = manufacturerFilter && !trimmed ? manufacturerFilter : trimmed;
+    const hubspotQuery = toHebrewSearchQuery(searchQuery) || searchQuery;
+    let filtered = await fetchHubSpotProductsByQuery(hubspotQuery, fetchLimit, descriptionProps, propsStr);
+
+    if (manufacturerFilter && filtered.length > 0) {
+      const beforeCount = filtered.length;
+      filtered = filtered.filter((p) => manufacturerMatches(p.manufacturer, manufacturerFilter));
+      logInfo('HubSpot product search: manufacturer filter applied', {
+        manufacturer: manufacturerFilter,
+        before: beforeCount,
+        after: filtered.length,
+      });
+    }
+    // When filtering by manufacturer and search-by-name returned none, try broad fetch and filter (e.g. manufacturer stored in Hebrew)
+    if (manufacturerFilter && filtered.length === 0 && searchQuery === manufacturerFilter) {
+      const broad = await fetchHubSpotProductsByQuery('', fetchLimit, descriptionProps, propsStr);
+      filtered = broad.filter((p) => manufacturerMatches(p.manufacturer, manufacturerFilter));
+      const uniqueManufacturers = [...new Set(broad.map((p) => p.manufacturer || '').filter(Boolean))].slice(0, 20);
+      logInfo('HubSpot product search: manufacturer filter (broad fetch)', {
+        manufacturer: manufacturerFilter,
+        after: filtered.length,
+        broadCount: broad.length,
+        sampleManufacturersInCatalog: uniqueManufacturers,
+      });
+    }
 
     // Post-filter: HubSpot may fuzzy-match (e.g. פסטה "pasta" → פסטו "pesto"). Keep only products that actually match. For product-type terms (pasta, sauce, etc.) require match in product name so we don't return "sauce for pasta" when user asked for "pasta".
     if (trimmed && filtered.length > 0) {
@@ -654,8 +737,9 @@ export async function searchHubSpotProducts(query: string, limit: number): Promi
     }
 
     if (filtered.length > 0) {
-      logInfo('HubSpot product search success', { query, requestedLimit: desired, returned: filtered.length });
-      return { products: filtered, matchType: 'exact' };
+      const slice = filtered.slice(0, desired);
+      logInfo('HubSpot product search success', { query, requestedLimit: desired, returned: slice.length });
+      return { products: slice, matchType: 'exact' };
     }
 
     // Step 2 (similar search): Fetch by each property/term (color, origin, type, etc.), gather candidates, then filter and rank by how many properties match.

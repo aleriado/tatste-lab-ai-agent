@@ -76,6 +76,9 @@ function extractProductLogistics(product: WooProduct): ProductLogistics | { miss
     return { missingFields };
   }
 
+  const moqBoxesRaw = product.metadata?.groupOrderMoqBoxes ?? (product as { groupOrderMoqBoxes?: number }).groupOrderMoqBoxes;
+  const moqBoxes = typeof moqBoxesRaw === 'number' && moqBoxesRaw > 0 ? moqBoxesRaw : undefined;
+
   return {
     productId: product.id,
     variantId: null,
@@ -84,7 +87,8 @@ function extractProductLogistics(product: WooProduct): ProductLogistics | { miss
     unitsPerBox: unitsPerBox as number,
     boxesPerLayer: boxesPerLayer as number,
     layersPerSurface: layersPerSurface as number,
-    boxesPerSurface: boxesPerSurface ?? ((boxesPerLayer as number) * (layersPerSurface as number))
+    boxesPerSurface: boxesPerSurface ?? ((boxesPerLayer as number) * (layersPerSurface as number)),
+    ...(moqBoxes != null && { moqBoxes }),
   };
 }
 
@@ -120,10 +124,12 @@ export async function executeTool(
       if (isBrowse && normalizedLimit < 50) normalizedLimit = 100;
       const maxPrice = Number(args.maxPrice);
       const minPrice = Number(args.minPrice);
+      const manufacturer = typeof args.manufacturer === 'string' && args.manufacturer.trim() ? args.manufacturer.trim() : undefined;
       const filters = {
         limit: normalizedLimit,
         ...(Number.isFinite(maxPrice) && maxPrice >= 0 && { maxPrice }),
         ...(Number.isFinite(minPrice) && minPrice >= 0 && { minPrice }),
+        ...(manufacturer && { manufacturer }),
       };
       if (typeof woo.searchProductsWithMeta === 'function') {
         const meta = await woo.searchProductsWithMeta(query, filters);
@@ -420,9 +426,14 @@ export async function executeTool(
           let userMessage = result.error?.message ?? 'Failed to add item to group order';
           
           if (result.error?.code === 'MANUFACTURER_MISMATCH') {
-            userMessage = `This group order is locked to manufacturer "${result.error.details.groupOrderManufacturer}". Product "${product.name}" is from "${result.error.details.productManufacturer}".`;
+            const locked = (result.error.details?.groupOrderManufacturer as string) ?? 'this manufacturer';
+            const productMfr = (result.error.details?.productManufacturer as string) ?? 'another';
+            userMessage = `This group order is locked to products from ${locked}. "${product.name}" is made by ${productMfr}, so it can't be added here. Would you like to see what's available from ${locked} instead?`;
+          } else if (result.error?.code === 'BELOW_MOQ') {
+            const moqBoxes = (result.error.details?.moqBoxes as number) ?? 1;
+            userMessage = `The minimum order for "${product.name}" is ${moqBoxes} boxes. You've asked for fewer. Would you like to go with the minimum of ${moqBoxes} boxes instead?`;
           } else if (result.error?.code === 'OVERFLOW') {
-            userMessage = `Cannot add ${quantity} units - would exceed group order capacity. ${result.error.message}`;
+            userMessage = `Only limited space is left on this surface. You asked for more than fits. Maximum you can add here is in the details. Would you like to take the remaining space, or join a new surface for the full amount? ${result.error.message}`;
           } else if (result.error?.code === 'LAYER_LIMIT_CONFLICT') {
             userMessage = `Cannot add this product - it would reduce the allowed layers per surface below currently opened layers.`;
           }
@@ -638,6 +649,18 @@ export async function executeTool(
       }
       const importUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
 
+      // Drop-import: whole layers only — quantity must be a multiple of units per layer
+      const unitsPerLayer = logistics.boxesPerLayer * logistics.unitsPerBox;
+      if (quantity <= 0 || quantity % unitsPerLayer !== 0) {
+        return {
+          data: {
+            error: `In a drop-import order, layers can't be split — each layer is committed in full. "${product.name}" layers contain ${logistics.boxesPerLayer} boxes each (${unitsPerLayer} units per layer). How many full layers would you like?`,
+            code: 'PARTIAL_LAYER',
+            details: { boxesPerLayer: logistics.boxesPerLayer, unitsPerBox: logistics.unitsPerBox, unitsPerLayer },
+          },
+        };
+      }
+
       try {
         const result = await addItemToImportOrder(code, ctx.customerId, logistics, quantity, {
           productName: product.name,
@@ -657,9 +680,11 @@ export async function executeTool(
 
           let userMessage = result.error?.message ?? 'Failed to add item to import order';
           if (result.error?.code === 'MANUFACTURER_MISMATCH') {
-            userMessage = `This import order is locked to a different manufacturer. "${product.name}" cannot be added.`;
+            const locked = (result.error.details?.groupOrderManufacturer as string) ?? 'this manufacturer';
+            const productMfr = (result.error.details?.productManufacturer as string) ?? 'another';
+            userMessage = `This import order is locked to products from ${locked}. "${product.name}" is made by ${productMfr}, so it can't be added here. Would you like to see what's available from ${locked} instead?`;
           } else if (result.error?.code === 'OVERFLOW') {
-            userMessage = `Cannot add ${quantity} units — would exceed palette capacity. ${result.error.message}`;
+            userMessage = `You've asked for more layers than fit on the remaining surface. Only limited space is left. Options: use the remaining space for this product, or use fewer layers and leave room for another product. ${result.error.message}`;
           } else if (result.error?.code === 'SINGLE_USER_VIOLATION') {
             userMessage = result.error.message;
           }
@@ -674,13 +699,15 @@ export async function executeTool(
           allocatedUnits: result.allocatedUnits,
         });
 
+        const layersAdded = result.allocatedBoxes / logistics.boxesPerLayer;
         return {
           data: {
-            message: `Added ${result.allocatedUnits} units (${result.allocatedBoxes} boxes) to import order ${code}`,
+            message: `Your ${layersAdded} layer(s) of ${product.name} are confirmed. ${result.allocatedBoxes} boxes (${result.allocatedUnits} items) added to import order ${code}.`,
             ...status,
             allocationResult: {
               allocatedBoxes: result.allocatedBoxes,
               allocatedUnits: result.allocatedUnits,
+              layersAdded,
               surfacesOpened: result.surfacesOpened,
               layersOpened: result.layersOpened,
             },
@@ -778,6 +805,210 @@ export async function executeTool(
         return { data: goStatus };
       } catch {
         return { data: { error: `Order "${lookup}" not found. Please check the code or ID.` } };
+      }
+    }
+
+    case 'group_update_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      const newQuantityBoxes = args.newQuantityBoxes as number;
+
+      const product = await woo.getProduct(productId);
+      if (!product) {
+        return { data: { error: `Product ${productId} not found` } };
+      }
+
+      const logistics = extractProductLogistics(product);
+      if (!logistics || 'missingFields' in logistics) {
+        const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+        return { data: { error: `Cannot update "${product.name}" in group order — missing logistics fields: ${missing.join(', ')}.` } };
+      }
+
+      // MOQ check — refuse if new quantity is positive but below MOQ
+      const moqBoxes = (logistics as ProductLogistics & { moqBoxes?: number }).moqBoxes ?? 1;
+      if (newQuantityBoxes > 0 && newQuantityBoxes < moqBoxes) {
+        return {
+          data: {
+            error: `Dropping to ${newQuantityBoxes} boxes puts you below the minimum of ${moqBoxes} boxes. You'd need to either stay at the minimum of ${moqBoxes} boxes or cancel your reservation entirely. What would you like to do?`,
+            code: 'BELOW_MOQ',
+            details: { moqBoxes, requestedBoxes: newQuantityBoxes }
+          }
+        };
+      }
+
+      try {
+        // Step 1: Remove current contribution for this product
+        await removeGroupOrderItem(code, ctx.customerId, productId);
+
+        // Step 2: If new quantity > 0, re-add with desired quantity
+        if (newQuantityBoxes > 0) {
+          const newQuantityUnits = newQuantityBoxes * logistics.unitsPerBox;
+
+          const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+          const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+          const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+          const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+          const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+          const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+          const groupUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
+
+          const result = await addItemToGroupOrder({
+            code,
+            customerId: ctx.customerId,
+            product: logistics,
+            quantityUnits: newQuantityUnits,
+            productName: product.name,
+            unitPrice: groupUnitPrice,
+            imageUrl: product.images?.[0]?.src ?? null,
+            ...(hasTierPrices && { importPricePer2Boxes: importPer2, importPricePerSurface: importPerSurface }),
+          });
+
+          if (!result.success) {
+            logInfo(`group_update_item: re-add failed productId=${productId} code=${code}`, { traceId: ctx.traceId, error: result.error });
+            return { data: { error: result.error?.message ?? 'Failed to update group order reservation', details: result.error } };
+          }
+        }
+
+        const go = await getGroupOrderStatus(code);
+        return {
+          data: {
+            message: newQuantityBoxes === 0
+              ? `Reservation for "${product.name}" has been cancelled. Those boxes are now available for other participants.`
+              : `Reservation updated to ${newQuantityBoxes} boxes of "${product.name}".`,
+            ...go
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`group_update_item: error productId=${productId} code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_checkout': {
+      const code = args.code as string;
+
+      try {
+        // Validate and transition order to CHECKOUT_STARTED
+        const checkoutResult = await checkoutImportOrder(code, ctx.customerId);
+
+        if (!checkoutResult.success) {
+          return { data: { error: checkoutResult.error ?? 'Failed to initiate import order checkout' } };
+        }
+
+        // Get order status for cost calculation
+        const status = await getGroupOrderStatus(code);
+
+        // Calculate total cost from participant costs
+        const myEntry = status.participantCosts?.find(p => p.customerId === ctx.customerId);
+        if (!myEntry || parseFloat(myEntry.total) <= 0) {
+          return {
+            data: {
+              error: `No items found in import order ${code}. Add products before checking out.`
+            }
+          };
+        }
+
+        const myTotal = parseFloat(myEntry.total);
+        const payment = getPaymentAdapter();
+        const paymentResult = await payment.createCheckoutSession({
+          customerId: ctx.customerId,
+          cartTotal: myTotal,
+          currency: 'ILS',
+          splitPayment: true,
+          groupOrderId: status.id,
+          meta: {
+            importOrderCode: code,
+            products: myEntry.products,
+            orderTotal: myTotal.toFixed(2)
+          }
+        });
+
+        return {
+          data: {
+            message: `Import order ${code} checkout initiated`,
+            importOrderCode: code,
+            yourTotal: myEntry.total,
+            products: myEntry.products,
+            paymentUrl: paymentResult.paymentUrl,
+            amountDueNow: paymentResult.amountDueNow,
+            amountDueLater: paymentResult.amountDueLater,
+            currency: paymentResult.currency
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_checkout failed code=${code}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
+      }
+    }
+
+    case 'import_update_item': {
+      const code = args.code as string;
+      const productId = args.productId as string;
+      const newLayerCount = args.newLayerCount as number;
+
+      try {
+        const existing = await getGroupOrderStatus(code);
+        if (!existing.isImport) {
+          return { data: { error: `Order ${code} is not an import order.` } };
+        }
+        if (existing.createdByCustomerId !== ctx.customerId) {
+          return { data: { error: 'Only the import order creator can update items.' } };
+        }
+
+        const product = await woo.getProduct(productId);
+        if (!product) return { data: { error: `Product ${productId} not found` } };
+
+        const logistics = extractProductLogistics(product);
+        if (!logistics || 'missingFields' in logistics) {
+          const missing = logistics && 'missingFields' in logistics ? logistics.missingFields : ['unknown'];
+          return { data: { error: `Missing logistics fields for "${product.name}": ${missing.join(', ')}.` } };
+        }
+
+        // Step 1: Remove current allocation for this product
+        await removeGroupOrderItem(code, ctx.customerId, productId);
+
+        // Step 2: Re-add with new layer count (if > 0)
+        if (newLayerCount > 0) {
+          const newQuantityUnits = newLayerCount * logistics.boxesPerLayer * logistics.unitsPerBox;
+
+          const importPer2 = parseFloat((product.importPricePer2Boxes ?? '').toString());
+          const importPerSurface = parseFloat((product.importPricePerSurface ?? '').toString());
+          const hasTierPrices = !isNaN(importPer2) && importPer2 > 0 && !isNaN(importPerSurface) && importPerSurface > 0;
+          const wholesale = parseFloat((product.wholesalePrice ?? '').toString());
+          const retail = parseFloat((product.retailPrice ?? product.price ?? '').toString());
+          const fallbackUnitPrice = !isNaN(wholesale) && wholesale > 0 ? wholesale : retail;
+          const importUnitPrice = Number.isFinite(fallbackUnitPrice) && fallbackUnitPrice > 0 ? fallbackUnitPrice : 0;
+
+          const result = await addItemToImportOrder(code, ctx.customerId, logistics, newQuantityUnits, {
+            productName: product.name,
+            unitPrice: importUnitPrice,
+            imageUrl: product.images?.[0]?.src ?? null,
+            ...(hasTierPrices && { importPricePer2Boxes: importPer2, importPricePerSurface: importPerSurface }),
+          });
+
+          if (!result.success) {
+            logInfo(`import_update_item: re-add failed productId=${productId} code=${code}`, { traceId: ctx.traceId, error: result.error });
+            return { data: { error: result.error?.message ?? 'Failed to update import order allocation', details: result.error } };
+          }
+        }
+
+        const status = await getGroupOrderStatus(code);
+        const layersFreed = newLayerCount === 0 ? 'all layers freed' : `updated to ${newLayerCount} layer(s)`;
+        logInfo(`import_update_item: success productId=${productId} code=${code} newLayerCount=${newLayerCount}`, { traceId: ctx.traceId });
+        return {
+          data: {
+            message: newLayerCount === 0
+              ? `"${product.name}" has been removed from import order ${code}. Those layers are now available.`
+              : `"${product.name}" updated to ${newLayerCount} layer(s) in import order ${code}. ${layersFreed}.`,
+            ...status
+          }
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`import_update_item failed code=${code} productId=${productId}`, { traceId: ctx.traceId, err });
+        return { data: { error: msg } };
       }
     }
 

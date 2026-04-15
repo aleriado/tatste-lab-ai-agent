@@ -38,11 +38,23 @@ export function allocateToGroupOrder(
     });
   }
 
+  // Group order MOQ in boxes: each user must commit at least moqBoxes boxes (spec)
+  if (!currentState.isImport && input.product.moqBoxes != null && input.product.moqBoxes > 0) {
+    const requestedBoxes = Math.floor(input.quantityUnits / input.product.unitsPerBox);
+    if (requestedBoxes < input.product.moqBoxes) {
+      return fail({
+        code: 'BELOW_MOQ',
+        message: `Minimum order for this product is ${input.product.moqBoxes} boxes. You requested ${requestedBoxes} boxes.`,
+        details: { moqBoxes: input.product.moqBoxes, requestedBoxes, requestedUnits: input.quantityUnits }
+      });
+    }
+  }
+
   const newSurfaceMaxLayers = calculateSurfaceMaxLayers(input.product, currentState);
   const layerConflictError = checkLayerLimitConflict(newSurfaceMaxLayers, currentState);
   if (layerConflictError) return fail(layerConflictError);
 
-  return performAllocation(input.product, input.quantityUnits, currentState, newSurfaceMaxLayers);
+  return performAllocation(input.product, input.quantityUnits, currentState, newSurfaceMaxLayers, input.customerId);
 }
 
 function fail(error: AllocationError): AllocationResult {
@@ -128,7 +140,8 @@ function performAllocation(
   product: ProductLogistics,
   requestedUnits: number,
   state: GroupOrderState,
-  surfaceMaxLayers: number
+  surfaceMaxLayers: number,
+  customerId: string
 ): AllocationResult {
   const capacityUnitsPerLayer = product.boxesPerLayer * product.unitsPerBox;
   let remainingUnits = requestedUnits;
@@ -138,6 +151,9 @@ function performAllocation(
   let newSurfacesOpened = 0;
   let newLayersOpened = 0;
 
+  const moqBoxes = state.isImport ? 0 : (product.moqBoxes ?? 0);
+  const maxUsersPerLayer = moqBoxes > 0 ? (product.boxesPerLayer / moqBoxes) | 0 : Infinity;
+
   // RULE: Fill existing open layers for the SAME product first
   for (const surface of state.surfaces) {
     if (remainingUnits <= 0) break;
@@ -145,6 +161,13 @@ function performAllocation(
       if (remainingUnits <= 0) break;
       if (layer.productId !== product.productId || layer.variantId !== (product.variantId ?? null)) continue;
       if (layer.status !== 'open') continue;
+
+      // Layer sharing cap: max users per layer = floor(boxes per layer / MOQ) (spec)
+      if (maxUsersPerLayer < Infinity) {
+        const alreadyInLayer = (layer.participantCustomerIds && layer.participantCustomerIds.includes(customerId)) ?? false;
+        const newParticipantCount = alreadyInLayer ? layer.participantCount : layer.participantCount + 1;
+        if (newParticipantCount > maxUsersPerLayer) continue; // skip; try next layer or open new
+      }
 
       const availableUnits = layer.capacityUnits - layer.filledUnits;
       if (availableUnits <= 0) continue;
@@ -229,7 +252,9 @@ function performAllocation(
       capacityUnits: capacityUnitsPerLayer,
       filledBoxes: boxesInLayer,
       filledUnits: unitsToAdd,
-      status: unitsToAdd >= capacityUnitsPerLayer ? 'full' : 'open'
+      status: unitsToAdd >= capacityUnitsPerLayer ? 'full' : 'open',
+      participantCount: 1,
+      participantCustomerIds: [customerId],
     };
 
     targetSurface.layers.push(newLayer);
