@@ -1,3 +1,4 @@
+import './loadEnv';
 import express from 'express';
 import { z } from 'zod';
 import {
@@ -334,7 +335,7 @@ app.post('/api/link-code', async (req, res) => {
     const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
     const botUrl = botUsername ? `https://t.me/${botUsername}?start=${code}` : null;
     const waPhoneNumber = process.env.WHATSAPP_PHONE_NUMBER ?? '';
-    const waUrl = waPhoneNumber ? `https://wa.me/${waPhoneNumber}?text=${encodeURIComponent(code)}` : null;
+    const waUrl = waPhoneNumber ? `https://api.whatsapp.com/send?phone=${waPhoneNumber}&text=${encodeURIComponent(code)}` : null;
     return res.json({ code, bot_url: botUrl, wa_url: waUrl, expires_in: 900, expires_at: expiresAt.toISOString() });
   } catch (err) {
     logError('Error creating link code', { err });
